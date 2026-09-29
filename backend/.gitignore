@@ -1,0 +1,10 @@
+# 真实密钥：只提交 .env.example，切勿把含 key 的 .env 提交进仓库
+.env
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 本地持久化数据目录（容器运行时绑定挂载，不入库，仅保留占位）
+data/*
+!data/.gitkeep

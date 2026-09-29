@@ -1,0 +1,7 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+httpx>=0.27
+pydantic>=2.7
+# 下列为路线图第 2/3 条增强位（按需启用，默认不装）
+# transformers>=4.40   # DeBERTa 本地推理（"是否拒绝"零样本分类）
+# spacy>=3.7           # 中文 NER（PII 识别）
