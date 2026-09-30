@@ -48,7 +48,9 @@ fun ModelConfigScreen(
     val guard by vm.guard.collectAsState()
 
     var name by remember { mutableStateOf(target?.name ?: "") }
-    var baseUrl by remember { mutableStateOf(target?.baseUrl ?: "https://api.openai.com/v1") }
+    // 不再预填示例地址：用户多为 deepseek/通义等非 OpenAI 端点，预填的值几乎总要手动删，
+    // 反而容易漏改而打到错误的供应商。改为空 + placeholder 给格式示例。
+    var baseUrl by remember { mutableStateOf(target?.baseUrl ?: "") }
     var apiKey by remember { mutableStateOf(target?.apiKey ?: "") }
     var model by remember { mutableStateOf(target?.model ?: "") }
 
@@ -88,7 +90,12 @@ fun ModelConfigScreen(
         Text("目标模型（BYOK）", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(name, { name = it }, label = { Text("模型名称") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
-        OutlinedTextField(baseUrl, { baseUrl = it }, label = { Text("Base URL（OpenAI 兼容）") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(
+            baseUrl, { baseUrl = it },
+            label = { Text("Base URL（OpenAI 兼容）") },
+            placeholder = { Text("如 https://api.openai.com/v1") },
+            modifier = Modifier.fillMaxWidth()
+        )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             apiKey, { apiKey = it }, label = { Text("API Key") },
