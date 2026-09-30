@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.PowerManager
 import android.os.PowerManager.PARTIAL_WAKE_LOCK
@@ -30,8 +31,13 @@ import kotlinx.coroutines.launch
  * 后台常驻测试服务。
  *
  * 为什么需要它：原来测试协程挂在 `viewModelScope`，切后台 / 息屏后系统进入 Doze 或回收进程，
- * 协程被掐断 → 用户看到"跑着跑着就断了"。前台服务把进程抬到前台优先级，配合部分唤醒锁
- * （PARTIAL_WAKE_LOCK）保 CPU 不睡，后台 / 息屏都能跑完。
+ * 协程被掐断 → 用户看到"跑着跑着就断了"。前台服务把进程抬到前台优先级，再叠三层保活：
+ *  1) 部分唤醒锁（PARTIAL_WAKE_LOCK）保 CPU 不睡；
+ *  2) WiFi 锁（WifiLock，WIFI_MODE_FULL_HIGH_PERF）保息屏后 WiFi 无线不休眠，否则 LAN 后端 SSE /
+ *     外部 LLM 请求会被掐断，测试卡死；
+ *  3) 开始测试前在 UI 层请求加入电池优化白名单（Doze 不再延迟网络、降低被杀概率）。
+ * 三层合起来，后台 / 息屏都能跑完。注意：华为 / 荣耀等 ROM 还有自己的「手机管家」自启动管理，
+ * 仍需用户手动把本 App 设为「允许后台活动 / 受保护应用」，代码无法替用户点。
  *
  * 类型选 `dataSync`：Android 14 要求前台服务声明类型，dataSync 是无特权类型里最贴合
  * "长时网络计算"的，且不要求麦克风/相机等敏感权限。需在 Manifest 声明
@@ -43,6 +49,7 @@ class TestRunService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -179,11 +186,25 @@ class TestRunService : Service() {
             // 兜底上限 6h：实测跑完会在 finally 里释放；这里防止极端情况下一直持有
             acquire(6L * 60 * 60 * 1000)
         }
+        // WiFi 锁：PARTIAL_WAKE_LOCK 只保 CPU 不睡，息屏后系统仍会让 WiFi 无线休眠/断流，
+        // 导致 LAN 后端 SSE 流或外部 LLM 请求卡死 → 测试看起来"跑着跑着断了"。
+        // 持有 WifiLock 强制 WiFi 保持唤醒，配合前台服务 + 唤醒锁，息屏也能跑完。
+        // 注：WifiLock 整套 API 自 API 34 起废弃（平台期望前台服务自动保 WiFi），但旧系统 /
+        // 华为等 ROM 仍需它；API 34+ 上主要靠「电池优化白名单」保证网络不被 Doze 延迟。
+        @Suppress("DEPRECATION")
+        val wm = getSystemService(Context.WIFI_SERVICE) as WifiManager
+        @Suppress("DEPRECATION")
+        wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL, "AISecLab::TestRun").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
     }
 
     private fun releaseWakeLock() {
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
         wakeLock = null
+        runCatching { wifiLock?.takeIf { it.isHeld }?.release() }
+        wifiLock = null
     }
 
     private fun notificationManager() =

@@ -30,7 +30,8 @@ import com.xieguojian.aiseclab.ui.TestViewModel
 fun HomeScreen(
     vm: TestViewModel,
     onNewTest: () -> Unit,
-    onHistory: () -> Unit
+    onHistory: () -> Unit,
+    onBackend: () -> Unit
 ) {
     val target by vm.target.collectAsState()
 
@@ -63,6 +64,12 @@ fun HomeScreen(
             onClick = onHistory,
             modifier = Modifier.fillMaxWidth().height(52.dp)
         ) { Text("历史记录", style = MaterialTheme.typography.titleMedium) }
+
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onBackend,
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text("后端设置", style = MaterialTheme.typography.titleMedium) }
 
         Spacer(Modifier.height(28.dp))
         Text(

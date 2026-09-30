@@ -38,12 +38,15 @@ import com.xieguojian.aiseclab.core.model.GuardProfile
 import com.xieguojian.aiseclab.ui.TestViewModel
 
 @Composable
-fun ModelConfigScreen(vm: TestViewModel, onNext: () -> Unit, onHistory: () -> Unit) {
+fun ModelConfigScreen(
+    vm: TestViewModel,
+    onNext: () -> Unit,
+    onHistory: () -> Unit,
+    onBackend: () -> Unit
+) {
     val target by vm.target.collectAsState()
     val aux by vm.aux.collectAsState()
     val guard by vm.guard.collectAsState()
-    val backendUrl by vm.backendUrl.collectAsState()
-    val backendToken by vm.backendToken.collectAsState()
 
     var name by remember { mutableStateOf(target?.name ?: "") }
     var baseUrl by remember { mutableStateOf(target?.baseUrl ?: "https://api.openai.com/v1") }
@@ -62,9 +65,6 @@ fun ModelConfigScreen(vm: TestViewModel, onNext: () -> Unit, onHistory: () -> Un
     var guardTierLabel by remember {
         mutableStateOf(guard?.tierLabel?.takeIf { it.isNotBlank() } ?: OnDeviceGuardModel.DEFAULT.label)
     }
-
-    var backendUrlField by remember { mutableStateOf(backendUrl) }
-    var backendTokenField by remember { mutableStateOf(backendToken) }
 
     val guardDownload by vm.guardDownload.collectAsState()
     val readyTiers by vm.readyTiers.collectAsState()
@@ -283,32 +283,13 @@ fun ModelConfigScreen(vm: TestViewModel, onNext: () -> Unit, onHistory: () -> Un
         }
 
         Spacer(Modifier.height(24.dp))
-        // ---- 测试后端（可选）----
-        Text("测试后端（可选）", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "留空 = 在本机跑（默认）；填了就把整轮测试委托给该后端服务器——适合没有算力、" +
-                "或想共享同一套裁判模型的场景。被测模型 Key 仅随请求发往后端，仅该任务周期内在服务器内存留存。",
-            style = MaterialTheme.typography.bodySmall
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            backendUrlField, { backendUrlField = it },
-            label = { Text("后端地址（局域网 http://192.168.x.x:8000；公网 https://...）") },
-            modifier = Modifier.fillMaxWidth()
-        )
-        Text(
-            "scheme 要与后端实际协议一致：局域网自测填 http://，公网 HTTPS 服务器填 https://；" +
-                "填反了会报 ssl: wrong version number。结尾不要带 /v1。",
-            style = MaterialTheme.typography.bodySmall
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            backendTokenField, { backendTokenField = it },
-            label = { Text("访问令牌（仅当后端设了 API_TOKEN 才填）") },
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth()
-        )
+        // ---- 测试后端：已独立成页，点进去设置（见 BackendConfigScreen）----
+        OutlinedButton(
+            onClick = onBackend,
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Text("测试后端设置（可选）", style = MaterialTheme.typography.titleMedium)
+        }
 
         Spacer(Modifier.height(28.dp))
         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
@@ -324,8 +305,6 @@ fun ModelConfigScreen(vm: TestViewModel, onNext: () -> Unit, onHistory: () -> Un
                         tierLabel = guardTierLabel
                     )
                 )
-                vm.saveBackendUrl(backendUrlField)
-                vm.saveBackendToken(backendTokenField)
                 onNext()
             }, enabled = baseUrl.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()) {
                 Text("下一步")
