@@ -32,6 +32,7 @@ import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
+import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.TestViewModel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -83,7 +84,7 @@ fun ReportScreen(
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
             Text("AI 体检报告", style = MaterialTheme.typography.headlineMedium)
-            Text("${report.modelProfile.name}（${report.modelProfile.model}）", style = MaterialTheme.typography.bodyMedium)
+            Text(modelLabel(report.modelProfile), style = MaterialTheme.typography.bodyMedium)
             if (reportOverride != null) {
                 val timeFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
                 Text(

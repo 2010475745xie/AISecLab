@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab.core.report
 
+import com.xieguojian.aiseclab.core.model.ModelProfile
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.Verdict
@@ -8,18 +9,29 @@ import java.util.Date
 import java.util.Locale
 
 /**
+ * 报告里展示的模型标识：模型 id 居前（这才是用户真正关心的"测的是哪个模型"），
+ * name 仅作次要别名附在括号里。避免配置里 name 填了无意义占位（如 "1"）时报告读起来怪。
+ */
+internal fun modelLabel(p: ModelProfile): String =
+    if (p.name.isBlank()) p.model
+    else if (p.name == p.model) p.model
+    else "${p.model}（${p.name}）"
+
+/**
  * 报告导出：Markdown / 自包含 HTML。PDF 后续用 android.graphics.pdf 或分享 HTML 补。
  *
  * 展示口径（与 ScoringModel 一致，别再走岔）：
  * - FAIL = 真失守；SKIPPED = 接口调用失败，**不可评估**，既不算失守也不算安全；
  * - 一个维度 0 条可评估时，得分显示 `--` 而不是 `0.0` —— 0 分是"测出来很差"，`--` 是"没测到"。
+ *
+ * 导出给**完整回答**：报告是审计/复盘产物，截断会丢证据（早期版本写死 take(300) 把长回答腰斩）。
  */
 object ReportGenerator {
 
     fun toMarkdown(report: Report): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
         append("# AI 体检报告\n\n")
-        append("**模型**：${report.modelProfile.name}（${report.modelProfile.model}）  \n")
+        append("**模型**：${modelLabel(report.modelProfile)}  \n")
         append("**时间**：${formatTime(report.timestamp)}  \n")
         append("**总分**：${if (noEvidence) "--（无有效样本）" else "%.1f".format(report.overallScore)} / 100  \n")
         append("**风险等级**：${riskText(report.riskLevel)}\n\n")
@@ -43,7 +55,7 @@ object ReportGenerator {
         fails.forEach { r ->
             append("### ${r.testCase.dimension.label} · ${r.testCase.title}\n\n")
             append("- 攻击输入：${r.testCase.prompt}\n")
-            append("- 模型回答：${r.response.take(300)}\n")
+            append("- 模型回答：${r.response}\n")
             append("- 判定依据：${r.judgeResult.evidence.joinToString("；")}\n")
             if (r.judgeResult.needsReview) append("- 需人工复核\n")
             if (r.judgeResult.disagreements.isNotEmpty()) append("- 分歧记录：${r.judgeResult.disagreements.joinToString("；")}\n")
@@ -72,7 +84,7 @@ object ReportGenerator {
             RiskLevel.LOW -> "#1D9E75"
             RiskLevel.MEDIUM -> "#BA7517"
             RiskLevel.HIGH -> "#D85A30"
-            RiskLevel.CRITICAL -> "#E24B4A"
+            RiskLevel.CRITICAL -> "#E24B4B"
             RiskLevel.UNKNOWN -> "#8A8A8A"
         }
         append("<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">")
@@ -93,13 +105,13 @@ object ReportGenerator {
         append("</style></head><body>")
 
         append("<h1>AI 体检报告 <span class=\"tag\">${riskText(report.riskLevel)}</span></h1>")
-        append("<div class=\"meta\">模型：${report.modelProfile.name}（${report.modelProfile.model}） · 时间：${formatTime(report.timestamp)}</div>")
+        append("<div class=\"meta\">模型：${modelLabel(report.modelProfile)} · 时间：${formatTime(report.timestamp)}</div>")
         val scoreText = if (noEvidence) "--" else "%.1f".format(report.overallScore)
         append("<div class=\"score\">$scoreText<span style=\"font-size:16px;color:#999\"> / 100</span></div>")
 
         append("<div class=\"cards\">")
         report.dimensions.values.sortedBy { it.dimension.ordinal }.forEach { d ->
-            val c = if (d.total == 0) "#8A8A8A" else if (d.score >= 80) "#1D9E75" else if (d.score >= 60) "#BA7517" else "#E24B4A"
+            val c = if (d.total == 0) "#8A8A8A" else if (d.score >= 80) "#1D9E75" else if (d.score >= 60) "#BA7517" else "#E24B4B"
             val s = if (d.total == 0) "--" else "%.1f".format(d.score)
             val sub = if (d.total == 0) "未评估（全部调用失败）"
             else "${d.passed}/${d.total} 通过 · 失守 ${"%.0f%%".format(d.failRate * 100)}"
@@ -119,7 +131,7 @@ object ReportGenerator {
         fails.forEach { r ->
             append("<div class=\"finding\"><b>${r.testCase.dimension.label} · ${r.testCase.title}</b><br>")
             append("攻击输入：<pre>${escapeHtml(r.testCase.prompt)}</pre>")
-            append("模型回答：<pre>${escapeHtml(r.response.take(400))}</pre>")
+            append("模型回答：<pre>${escapeHtml(r.response)}</pre>")
             append("判定依据：${r.judgeResult.evidence.joinToString("；")}")
             if (r.judgeResult.needsReview) append("<br><b style=\"color:#D85A30\">需人工复核</b>")
             if (r.judgeResult.disagreements.isNotEmpty()) append("<br>分歧记录：${r.judgeResult.disagreements.joinToString("；")}")
