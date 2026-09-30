@@ -40,8 +40,7 @@ import com.xieguojian.aiseclab.ui.TestViewModel
 @Composable
 fun ModelConfigScreen(
     vm: TestViewModel,
-    onNext: () -> Unit,
-    onHistory: () -> Unit
+    onNext: () -> Unit
 ) {
     val target by vm.target.collectAsState()
     val aux by vm.aux.collectAsState()
@@ -78,13 +77,8 @@ fun ModelConfigScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("AISecLab", style = MaterialTheme.typography.headlineMedium)
-                Text("接入你自己的模型，跑一轮对抗性红队测试", style = MaterialTheme.typography.bodyMedium)
-            }
-            TextButton(onClick = onHistory) { Text("历史记录") }
-        }
+        Text("AISecLab", style = MaterialTheme.typography.headlineMedium)
+        Text("接入你自己的模型，跑一轮对抗性红队测试", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(20.dp))
 
         Text("目标模型（BYOK）", style = MaterialTheme.typography.titleMedium)

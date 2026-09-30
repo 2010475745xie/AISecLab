@@ -171,8 +171,7 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                 )
                 Screen.CONFIG -> ModelConfigScreen(
                     vm,
-                    onNext = { screen = Screen.TEST },
-                    onHistory = { screen = Screen.HOME }
+                    onNext = { screen = Screen.TEST }
                 )
                 Screen.TEST -> TestConfigScreen(
                     vm,
