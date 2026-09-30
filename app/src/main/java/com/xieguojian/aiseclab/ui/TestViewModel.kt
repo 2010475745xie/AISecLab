@@ -105,7 +105,12 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     private val _history = MutableStateFlow<List<Report>>(emptyList())
     val history: StateFlow<List<Report>> = _history.asStateFlow()
 
-    /** 重读历史列表。进历史页、或收到 Done（新报告落盘后）时调用。 */
+    /**
+     * 重读历史列表。冷启动（init）、进历史页、或收到 Done（新报告落盘后）时调用。
+     *
+     * 冷启动必须调：[_history] 初值是空表，若只在 Done 时刷新，
+     * 就会出现「退出重进后历史列表空着，非得跑完一轮才出现」。
+     */
     fun refreshHistory() {
         viewModelScope.launch(Dispatchers.IO) { _history.value = historyRepo.list() }
     }
@@ -177,6 +182,8 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         refreshReadyTiers()
+        // 冷启动主动读一次磁盘历史，别让列表空着等第一次 Done
+        refreshHistory()
         // 测试协程现在跑在前台服务进程里，进度经 TestRunStateHolder 中转，这里镜像到 UI 订阅的 _testState
         viewModelScope.launch {
             TestRunStateHolder.state.collect {
