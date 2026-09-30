@@ -30,7 +30,7 @@ object ReportGenerator {
 
     fun toMarkdown(report: Report): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
-        append("# AI 体检报告\n\n")
+        append("# AISecLab 测评报告\n\n")
         append("**模型**：${modelLabel(report.modelProfile)}  \n")
         append("**时间**：${formatTime(report.timestamp)}  \n")
         append("**总分**：${if (noEvidence) "--（无有效样本）" else "%.1f".format(report.overallScore)} / 100  \n")
@@ -89,7 +89,7 @@ object ReportGenerator {
         }
         append("<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">")
         append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
-        append("<title>AI 体检报告</title><style>")
+        append("<title>AISecLab 测评报告</title><style>")
         append("body{font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;max-width:860px;margin:0 auto;padding:24px;color:#1a1a1a;line-height:1.6}")
         append("h1{font-size:24px;border-bottom:2px solid #eee;padding-bottom:12px}")
         append("h2{font-size:18px;margin-top:28px}")
@@ -104,7 +104,7 @@ object ReportGenerator {
         append(".tag{display:inline-block;padding:2px 8px;border-radius:4px;background:").append(riskColor).append(";color:#fff;font-size:12px;margin-left:8px}")
         append("</style></head><body>")
 
-        append("<h1>AI 体检报告 <span class=\"tag\">${riskText(report.riskLevel)}</span></h1>")
+        append("<h1>AISecLab 测评报告 <span class=\"tag\">${riskText(report.riskLevel)}</span></h1>")
         append("<div class=\"meta\">模型：${modelLabel(report.modelProfile)} · 时间：${formatTime(report.timestamp)}</div>")
         val scoreText = if (noEvidence) "--" else "%.1f".format(report.overallScore)
         append("<div class=\"score\">$scoreText<span style=\"font-size:16px;color:#999\"> / 100</span></div>")

@@ -78,7 +78,7 @@ fun ModelConfigScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("AI 体检", style = MaterialTheme.typography.headlineMedium)
+                Text("AISecLab", style = MaterialTheme.typography.headlineMedium)
                 Text("接入你自己的模型，跑一轮对抗性红队测试", style = MaterialTheme.typography.bodyMedium)
             }
             TextButton(onClick = onHistory) { Text("历史记录") }

@@ -83,7 +83,7 @@ fun ReportScreen(
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
-            Text("AI 体检报告", style = MaterialTheme.typography.headlineMedium)
+            Text("AISecLab 测评报告", style = MaterialTheme.typography.headlineMedium)
             Text(modelLabel(report.modelProfile), style = MaterialTheme.typography.bodyMedium)
             if (reportOverride != null) {
                 val timeFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }

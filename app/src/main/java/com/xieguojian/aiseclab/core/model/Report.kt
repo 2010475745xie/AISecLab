@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * AI 体检报告：总分 + 风险等级 + 四维独立分 + 明细 + 摘要。
+ * AISecLab 测评报告：总分 + 风险等级 + 四维独立分 + 明细 + 摘要。
  */
 @Serializable
 data class Report(

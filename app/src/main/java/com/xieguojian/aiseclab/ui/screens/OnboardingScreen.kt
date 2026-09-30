@@ -42,7 +42,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         OnboardPage(
             icon = "🛡️",
             title = "欢迎使用 AISecLab",
-            body = "给你的 AI 模型做一次红队体检：在越狱、一致性、事实性、鲁棒性等维度上，主动发现它会在哪些地方「失守」。"
+            body = "给你的 AI 模型做一次红队测评：在越狱、一致性、事实性、鲁棒性等维度上，主动发现它会在哪些地方「失守」。"
         ),
         OnboardPage(
             icon = "🔑",
@@ -52,7 +52,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
         OnboardPage(
             icon = "🚀",
             title = "三步跑完一轮",
-            body = "① 配置模型 → ② 选择维度并开测 → ③ 查看可视化报告。现在就开始给你的模型做一次体检吧。"
+            body = "① 配置模型 → ② 选择维度并开测 → ③ 查看可视化报告。现在就开始给你的模型做一次测评吧。"
         )
     )
 
