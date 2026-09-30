@@ -10,6 +10,7 @@ import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ModelProfile
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.TestResult
+import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.score.ScoringModel
 
 /**
@@ -34,7 +35,8 @@ class TestRunner(
     ): Report {
         val cases = modules.flatMap { it.buildCases() }
         val total = cases.size
-        onLog?.invoke("▶ 共 ${total} 条用例（${modules.joinToString("/") { it.dimension.label }}）")
+        val dimLabels = modules.joinToString("/") { it.dimension.label }
+        onLog?.invoke("▶ 开始测试：共 $total 条用例，维度 [$dimLabels]，递归对抗 = ${if (useRecursive && attackerChat != null) "开启" else "关闭"}")
         val results = mutableListOf<TestResult>()
 
         val recursive = useRecursive && attackerChat != null
@@ -53,9 +55,18 @@ class TestRunner(
             // 安全维度：递归对抗（串行迭代）
             val ra = RecursiveAdversarialAttack(targetClient, judge, attackerChat)
             for (c in securityCases) {
-                results.add(ra.attack(c, maxRounds = maxAttackRounds))
+                val r = ra.attack(c, maxRounds = maxAttackRounds)
+                results.add(r)
                 done++
-                onLog?.invoke("● [security·递归] 用例 #$done/$total 完成（${c.title}）")
+                val verdictZh = when (r.judgeResult.verdict) {
+                    Verdict.PASS -> "通过"
+                    Verdict.FAIL -> "失守"
+                    Verdict.SKIPPED -> "跳过"
+                    Verdict.INCONCLUSIVE -> "待定"
+                }
+                onLog?.invoke("● [security·递归] #$done/$total 《${c.title}》 → $verdictZh")
+                onLog?.invoke("  输入：${c.prompt.replace("\n", " ").replace("\r", "").take(140)}")
+                onLog?.invoke("  回答：${r.response.replace("\n", " ").replace("\r", "").take(180)}")
                 onProgress(done, total)
             }
         } else {

@@ -8,9 +8,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -29,7 +30,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.ui.TestViewModel
 import com.xieguojian.aiseclab.ui.screens.BackendConfigScreen
-import com.xieguojian.aiseclab.ui.screens.HistoryScreen
 import com.xieguojian.aiseclab.ui.screens.HomeScreen
 import com.xieguojian.aiseclab.ui.screens.ModelConfigScreen
 import com.xieguojian.aiseclab.ui.screens.OnboardingScreen
@@ -51,22 +51,22 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * 屏幕层级（改成「底部标签栏」导航，对标微信/QQ）：
- * 三个常驻标签页 —— 体检(HOME) / 历史(HISTORY) / 设置(SETTINGS)；
+ * 屏幕层级（底部标签栏导航，对标微信/QQ）：
+ * 两个常驻标签页 —— 测试(HOME) / 设置(SETTINGS)；历史记录已合并进「测试」页。
  * 其余是子流程 / 全屏页，不显示底栏：CONFIG（填模型）→ TEST（选维度开测）
  * → RUNNING（进度+终端日志）→ REPORT（报告）；BACKEND（后端设置）从「设置」进。
- * 顶层的 Running→RUNNING / Done→REPORT 由 LaunchedEffect 统一驱动。
+ * 新建测试由「测试」页右下角悬浮「+」触发（CONFIG←HOME）。
+ * 测试中允许系统返回回首页看进度（后台服务继续跑）；仅在 RUNNING 页看测试时完成才自动跳 REPORT。
  */
 enum class Screen { ONBOARDING, HOME, CONFIG, TEST, RUNNING, REPORT, HISTORY, BACKEND, SETTINGS }
 
-/** 底部标签栏的三个常驻页。 */
+/** 底部标签栏的两个常驻页：测试（中心）/ 设置。历史已合并进「测试」页。 */
 private enum class BottomTab(
     val screen: Screen,
     val label: String,
     val icon: ImageVector
 ) {
-    HOME(Screen.HOME, "体检", Icons.Filled.Shield),
-    HISTORY(Screen.HISTORY, "历史", Icons.Filled.History),
+    HOME(Screen.HOME, "测试", Icons.Filled.BugReport),
     SETTINGS(Screen.SETTINGS, "设置", Icons.Filled.Settings)
 }
 
@@ -90,16 +90,16 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
     val testState by vm.testState.collectAsState()
     LaunchedEffect(testState) {
         when (testState) {
-            is TestViewModel.TestState.Running -> if (screen != Screen.RUNNING) screen = Screen.RUNNING
-            is TestViewModel.TestState.Done -> if (screen != Screen.REPORT) screen = Screen.REPORT
+            // 运行中不再强制跳运行页：用户在首页也能看进度、随时进出；
+            // 只有「正在看运行页时」测试完成，才自动跳到报告页。
+            is TestViewModel.TestState.Done -> if (screen == Screen.RUNNING) screen = Screen.REPORT
             else -> {}
         }
     }
 
     // 底栏只在三个常驻标签页显示；子流程/全屏页隐藏，避免遮挡进度与报告
-    val showBottomBar = screen in setOf(Screen.HOME, Screen.HISTORY, Screen.SETTINGS)
+    val showBottomBar = screen in setOf(Screen.HOME, Screen.SETTINGS)
     val currentTab = when (screen) {
-        Screen.HISTORY -> BottomTab.HISTORY
         Screen.SETTINGS -> BottomTab.SETTINGS
         else -> BottomTab.HOME
     }
@@ -109,7 +109,7 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
     // 子流程按来源回退到对应标签页 / 父页。
     BackHandler(
         enabled = when (screen) {
-            Screen.HOME, Screen.ONBOARDING, Screen.RUNNING, Screen.HISTORY, Screen.SETTINGS -> false
+            Screen.HOME, Screen.ONBOARDING, Screen.SETTINGS -> false
             else -> true
         }
     ) {
@@ -117,10 +117,12 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
             Screen.TEST -> screen = Screen.CONFIG
             Screen.CONFIG -> screen = configFrom
             Screen.BACKEND -> screen = backendFrom
+            // 测试中允许退出（系统返回）：回首页看进度，后台服务继续跑
+            Screen.RUNNING -> screen = Screen.HOME
             Screen.REPORT -> {
-                val fromHistory = viewingHistory != null
                 viewingHistory = null
-                screen = if (fromHistory) Screen.HISTORY else Screen.TEST
+                // 历史已合并进「测试」页，看历史报告后返回首页；看本轮报告也回首页
+                screen = Screen.HOME
             }
             else -> {}
         }
@@ -140,6 +142,14 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                     }
                 }
             }
+        },
+        // 新建测试：仅在「测试」标签页显示右下角悬浮「+」
+        floatingActionButton = {
+            if (screen == Screen.HOME) {
+                FloatingActionButton(onClick = { configFrom = Screen.HOME; screen = Screen.CONFIG }) {
+                    Icon(Icons.Filled.Add, contentDescription = "新建测试")
+                }
+            }
         }
     ) { innerPadding ->
         Box(Modifier.fillMaxSize().padding(innerPadding)) {
@@ -152,23 +162,29 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                 )
                 Screen.HOME -> HomeScreen(
                     vm,
-                    onNewTest = { configFrom = Screen.HOME; screen = Screen.CONFIG }
+                    onOpenRun = { screen = Screen.RUNNING },
+                    onViewReport = { screen = Screen.REPORT },
+                    onOpenHistory = { report ->
+                        viewingHistory = report
+                        screen = Screen.REPORT
+                    }
                 )
                 Screen.CONFIG -> ModelConfigScreen(
                     vm,
                     onNext = { screen = Screen.TEST },
-                    onHistory = { screen = Screen.HISTORY },
+                    onHistory = { screen = Screen.HOME },
                     onBackend = { backendFrom = Screen.CONFIG; screen = Screen.BACKEND }
                 )
                 Screen.TEST -> TestConfigScreen(
                     vm,
-                    onBack = { screen = Screen.CONFIG }
+                    onBack = { screen = Screen.CONFIG },
+                    onStart = { screen = Screen.RUNNING }
                 )
                 Screen.RUNNING -> RunScreen(
                     vm,
                     onStop = {
                         vm.reset()
-                        screen = Screen.CONFIG
+                        screen = Screen.HOME
                     }
                 )
                 Screen.REPORT -> {
@@ -178,7 +194,8 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                         reportOverride = fromHistory,
                         onBack = {
                             viewingHistory = null
-                            screen = if (fromHistory != null) Screen.HISTORY else Screen.TEST
+                            // 历史已合并进「测试」页：看历史报告后返回首页
+                            screen = Screen.HOME
                         },
                         onRestart = {
                             vm.reset()
@@ -186,14 +203,6 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                         }
                     )
                 }
-                Screen.HISTORY -> HistoryScreen(
-                    vm,
-                    onBack = { screen = Screen.HOME },
-                    onOpen = { report ->
-                        viewingHistory = report
-                        screen = Screen.REPORT
-                    }
-                )
                 Screen.BACKEND -> BackendConfigScreen(
                     vm,
                     onBack = { screen = backendFrom }
@@ -203,6 +212,8 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                     onModelConfig = { configFrom = Screen.SETTINGS; screen = Screen.CONFIG },
                     onBackend = { backendFrom = Screen.SETTINGS; screen = Screen.BACKEND }
                 )
+                // 历史已合并进「测试」页：HISTORY 不再作为独立标签页，这里兜底不处理
+                else -> {}
             }
         }
     }

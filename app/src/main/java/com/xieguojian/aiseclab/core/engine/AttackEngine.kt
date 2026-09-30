@@ -2,8 +2,10 @@ package com.xieguojian.aiseclab.core.engine
 
 import com.xieguojian.aiseclab.core.api.OpenAiCompatibleClient
 import com.xieguojian.aiseclab.core.judge.Judge
+import com.xieguojian.aiseclab.core.model.JudgeLevel
 import com.xieguojian.aiseclab.core.model.TestCase
 import com.xieguojian.aiseclab.core.model.TestResult
+import com.xieguojian.aiseclab.core.model.Verdict
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -40,11 +42,31 @@ class AttackEngine(
                 async {
                     semaphore.withPermit {
                         val result = runCase(case)
-                        val verdict = result.judgeResult.verdict.name
                         synchronized(lock) {
                             results.add(result)
                             completed++
-                            onLog?.invoke("✓ [${case.dimension.label}] #$completed/$total 完成（$verdict）")
+                            val jr = result.judgeResult
+                            val verdictZh = when (jr.verdict) {
+                                Verdict.PASS -> "通过"
+                                Verdict.FAIL -> "失守"
+                                Verdict.SKIPPED -> "跳过"
+                                Verdict.INCONCLUSIVE -> "待定"
+                            }
+                            val levelZh = when (jr.level) {
+                                JudgeLevel.L1_PATTERN -> "规则"
+                                JudgeLevel.L2_SEMANTIC -> "语义"
+                                JudgeLevel.L3_STRUCTURAL -> "结构"
+                                JudgeLevel.LLM -> "LLM"
+                            }
+                            onLog?.invoke(
+                                "✓ [${case.dimension.label}] #$completed/$total 《${case.title}》 → $verdictZh" +
+                                "（置信 ${(jr.confidence * 100).toInt()}% · $levelZh）"
+                            )
+                            onLog?.invoke("  输入：${case.prompt.replace("\n", " ").replace("\r", "").take(140)}")
+                            onLog?.invoke("  回答：${result.response.replace("\n", " ").replace("\r", "").take(180)}")
+                            jr.evidence.firstOrNull()?.let {
+                                onLog?.invoke("  依据：${it.replace("\n", " ").replace("\r", "").take(160)}")
+                            }
                         }
                         onProgress(completed, total)
                     }

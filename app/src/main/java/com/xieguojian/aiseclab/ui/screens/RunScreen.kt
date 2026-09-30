@@ -37,7 +37,8 @@ import com.xieguojian.aiseclab.ui.TestViewModel
  * 测试运行页：顶部进度条 + 下方「类终端」窗口实时显示测试进程信息（[TestViewModel.testLog]）。
  *
  * 终端窗口固定深色背景（无论 App 是明/暗主题），等宽字体 + 按前缀着色，
- * 自动滚到最新一行。测试进行中禁用系统返回（用「停止」按钮结束并回到配置页）。
+ * 自动滚到最新一行。测试进行中允许系统返回（回首页看进度，后台服务继续跑）；
+ * 页内「停止」按钮可主动结束测试。
  */
 @Composable
 fun RunScreen(

@@ -35,7 +35,7 @@ import com.xieguojian.aiseclab.core.model.RoleSource
 import com.xieguojian.aiseclab.ui.TestViewModel
 
 @Composable
-fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit) {
+fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit) {
     val selected by vm.selectedDimensions.collectAsState()
     val useRecursive by vm.useRecursive.collectAsState()
     val roleSource by vm.roleSource.collectAsState()
@@ -190,6 +190,7 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit) {
                                 }
                             }
                             vm.startTest()
+                            onStart()
                         },
                         enabled = selected.isNotEmpty() && state !is TestViewModel.TestState.Running
                     ) { Text("开始测试") }

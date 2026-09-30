@@ -90,7 +90,8 @@ class BackendClient {
         onLog: ((String) -> Unit)? = null
     ): Report = withContext(Dispatchers.IO) {
         val sid = createSession(baseUrl, target, aux, judge, dimensions, recursive, token)
-        onLog?.invoke("▶ 已创建后端会话（sessionId=$sid）")
+        onLog?.invoke("▶ 已委托后端测试：目标 ${target.model} @ $baseUrl")
+        onLog?.invoke("  sessionId = $sid")
         subscribeStream(baseUrl, sid, token, onProgress, onLog)
         getReport(baseUrl, sid, token)
     }
@@ -169,7 +170,7 @@ class BackendClient {
                         onProgress(ev.completed, ev.total)
                         // 后端 SSE 已带维度与可选 message：转成终端日志行
                         val dim = ev.dimension?.let { "[$it] " } ?: ""
-                        onLog?.invoke("● ${dim}进度 ${ev.completed}/${ev.total}")
+                        onLog?.invoke("● [后端] ${dim}进度 ${ev.completed}/${ev.total}")
                         ev.message?.takeIf { it.isNotBlank() }?.let { onLog?.invoke("  $it") }
                     }
                     "done" -> {
