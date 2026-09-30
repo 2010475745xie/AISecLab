@@ -1,8 +1,17 @@
 package com.xieguojian.aiseclab.ui
 
+import android.content.Context
+import com.xieguojian.aiseclab.core.model.Report
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.Json
+import java.io.BufferedWriter
+import java.io.File
+import java.io.FileWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 前台服务 ↔ ViewModel 之间的测试状态桥。
@@ -28,12 +37,53 @@ object TestRunStateHolder {
     /** 单轮日志上限，超过从头部丢弃最旧行（防止极端长跑把内存撑爆）。 */
     private const val MAX_LOG_LINES = 2000
 
+    // ── 文件日志：把每轮测试的终端日志 + 报告 JSON 落盘到应用外部文件夹（无需任何权限）──
+    // 路径：/storage/emulated/0/Android/data/com.xieguojian.aiseclab/files/logs/aiseclab_run_<ts>.log
+    // 用户可在「文件管理」直接访问，便于事后审计 / 排查。所有 IO 全部 runCatching 吞异常，
+    // 落盘失败绝不影响主测试流程。
+    private var runLogWriter: BufferedWriter? = null
+    private var runLogFile: File? = null
+    private val logTsFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    private val reportJson = Json { ignoreUnknownKeys = true }
+
+    /** 当前轮日志文件路径（仅用于终端提示，文件关闭后仍为最后一轮路径）。 */
+    val currentRunLogPath: String?
+        get() = runLogFile?.absolutePath
+
+    /**
+     * 新一轮测试开始时调用：在应用外部文件夹建 `logs/` 目录并新建一个 `.log` 文件，写入头部。
+     * [header] 由调用方填上模式 / 模型 / 维度等关键元信息。
+     */
+    fun beginRun(context: Context, header: String) {
+        runCatching {
+            val dir = File(context.getExternalFilesDir(null), "logs").apply { if (!exists()) mkdirs() }
+            val ts = System.currentTimeMillis()
+            val file = File(dir, "aiseclab_run_$ts.log")
+            runLogFile = file
+            runLogWriter = BufferedWriter(FileWriter(file, true)).also { w ->
+                w.write("==== AISecLab 测试运行日志 ====\n")
+                w.write("时间：${logTsFmt.format(Date(ts))}\n")
+                if (header.isNotBlank()) w.write(header + "\n")
+                w.write("文件：${file.absolutePath}\n")
+                w.write("===========================\n")
+                w.flush()
+            }
+        }.onFailure { runLogFile = null }
+    }
+
     fun appendLog(line: String) {
         val next = _log.value.toMutableList().apply {
             add(line)
             while (size > MAX_LOG_LINES) removeAt(0)
         }
         _log.value = next
+        // 同步落盘：带时间戳，便于事后按时间线复盘
+        runCatching {
+            runLogWriter?.let { w ->
+                w.write("[${logTsFmt.format(Date())}] $line\n")
+                w.flush()
+            }
+        }
     }
 
     fun update(s: TestViewModel.TestState) {
@@ -44,9 +94,42 @@ object TestRunStateHolder {
         _state.value = s
     }
 
+    /**
+     * 测试结束（完成 / 出错）时调用：把报告 JSON 追加进日志，再关闭文件。
+     * [report] 为 null 表示出错没有报告，只收尾不写 JSON。apiKey 同历史存档一样就地抹零。
+     */
+    fun finalizeRun(report: Report?) {
+        runCatching {
+            runLogWriter?.let { w ->
+                w.write("\n==== 测试报告（JSON） ====\n")
+                if (report != null) {
+                    val sanitized = report.copy(modelProfile = report.modelProfile.copy(apiKey = ""))
+                    w.write(reportJson.encodeToString(Report.serializer(), sanitized) + "\n")
+                } else {
+                    w.write("(无报告)\n")
+                }
+                w.flush()
+            }
+        }
+        closeRunLog()
+    }
+
     fun reset() {
+        // 用户中途点「停止」：落盘一条中断标记再收尾
+        runCatching {
+            runLogWriter?.let { w ->
+                w.write("\n[${logTsFmt.format(Date())}] 运行已被用户中断\n")
+                w.flush()
+            }
+        }
+        closeRunLog()
         _state.value = TestViewModel.TestState.Idle
         _log.value = emptyList()
+    }
+
+    private fun closeRunLog() {
+        runCatching { runLogWriter?.close() }
+        runLogWriter = null
     }
 
     val isRunning: Boolean

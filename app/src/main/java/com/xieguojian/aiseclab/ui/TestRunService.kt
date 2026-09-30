@@ -94,6 +94,16 @@ class TestRunService : Service() {
             }
             startForeground(NOTIF_ID, buildNotification("准备中…（后端）"))
             acquireWakeLock()
+            TestRunStateHolder.beginRun(
+                applicationContext,
+                buildString {
+                    appendLine("模式：后端（委托服务器运行）")
+                    appendLine("后端地址：$backendUrl")
+                    appendLine("目标模型：${target.name.ifBlank { target.id }}")
+                    appendLine("维度：${dims.joinToString("/") { it.label }}")
+                    appendLine("递归对抗：$recursive")
+                }
+            )
             val client = BackendClient()
             scope.launch {
                 TestRunStateHolder.update(TestViewModel.TestState.Running(0, 0))
@@ -115,9 +125,17 @@ class TestRunService : Service() {
                     runCatching { HistoryRepository(applicationContext).save(report) }
                     TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
                     TestRunStateHolder.update(TestViewModel.TestState.Done(report))
+                    TestRunStateHolder.currentRunLogPath?.let { p ->
+                        TestRunStateHolder.appendLog("📄 完整运行日志已保存到：$p")
+                    }
+                    TestRunStateHolder.finalizeRun(report)
                 } catch (e: Exception) {
                     TestRunStateHolder.appendLog("✗ 错误：${e.message ?: "未知错误"}")
                     TestRunStateHolder.update(TestViewModel.TestState.Error(e.message ?: "未知错误"))
+                    TestRunStateHolder.currentRunLogPath?.let { p ->
+                        TestRunStateHolder.appendLog("📄 运行日志已保存到：$p")
+                    }
+                    TestRunStateHolder.finalizeRun(null)
                 } finally {
                     releaseWakeLock()
                     stopForeground(STOP_FOREGROUND_REMOVE)
@@ -131,6 +149,15 @@ class TestRunService : Service() {
         // 必须在 onStartCommand 返回前 5s 内调用 startForeground，否则 Android 14 直接 ANR/崩溃
         startForeground(NOTIF_ID, buildNotification("准备中…"))
         acquireWakeLock()
+        TestRunStateHolder.beginRun(
+            applicationContext,
+            buildString {
+                appendLine("模式：本地（端上直接跑）")
+                appendLine("目标模型：${target.name.ifBlank { target.id }}")
+                appendLine("维度：${dims.joinToString("/") { it.label }}")
+                appendLine("递归对抗：$recursive")
+            }
+        )
 
         val session = TestSession(application, target, aux, guard, roleSource, dims, recursive)
         scope.launch {
@@ -146,9 +173,17 @@ class TestRunService : Service() {
                 runCatching { HistoryRepository(applicationContext).save(report) }
                 TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
                 TestRunStateHolder.update(TestViewModel.TestState.Done(report))
+                TestRunStateHolder.currentRunLogPath?.let { p ->
+                    TestRunStateHolder.appendLog("📄 完整运行日志已保存到：$p")
+                }
+                TestRunStateHolder.finalizeRun(report)
             } catch (e: Exception) {
                 TestRunStateHolder.appendLog("✗ 错误：${e.message ?: "未知错误"}")
                 TestRunStateHolder.update(TestViewModel.TestState.Error(e.message ?: "未知错误"))
+                TestRunStateHolder.currentRunLogPath?.let { p ->
+                    TestRunStateHolder.appendLog("📄 运行日志已保存到：$p")
+                }
+                TestRunStateHolder.finalizeRun(null)
             } finally {
                 releaseWakeLock()
                 stopForeground(STOP_FOREGROUND_REMOVE)
