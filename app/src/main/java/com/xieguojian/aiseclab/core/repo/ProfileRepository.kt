@@ -98,6 +98,20 @@ class ProfileRepository(context: Context) {
         prefs.getString(KEY_BACKEND_TOKEN, null)?.trim() ?: ""
 
     /**
+     * 「本机运行测试」总开关。**默认关闭**。
+     *
+     * 关闭时：没填后端地址就不允许开测 —— 端上跑没有多次采样/稳定性保护（后端才有
+     * SAMPLES_PER_CASE 多数裁决），单次采样定论的结果方差无人兜底，所以默认引导走后端。
+     * 开启时：恢复旧行为（后端地址留空 = 端上直接跑）。
+     */
+    fun saveLocalRunEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LOCAL_RUN, enabled).apply()
+    }
+
+    fun loadLocalRunEnabled(): Boolean =
+        prefs.getBoolean(KEY_LOCAL_RUN, false)   // 默认关闭
+
+    /**
      * 首次启动引导页标记。
      *
      * 仅存一个布尔：第一次走完引导（[finishOnboarding]）后置 true，
@@ -117,6 +131,7 @@ class ProfileRepository(context: Context) {
         private const val KEY_ROLE_SOURCE = "role_source"
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_BACKEND_TOKEN = "backend_token"
+        private const val KEY_LOCAL_RUN = "local_run_enabled"
         private const val KEY_ONBOARDED = "onboarded"
     }
 }

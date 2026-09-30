@@ -145,7 +145,22 @@ class TestRunService : Service() {
             return START_REDELIVER_INTENT
         }
 
-        // ── 本地模式：端上直接跑（默认，无需自有后端）──
+        // 既没配后端、又关着「本机运行测试」→ 不允许开测（这是默认状态）。
+        // 端上跑没有后端的多次采样/稳定性保护，单次采样定论方差无人兜底，所以默认拦住。
+        if (!repo.loadLocalRunEnabled()) {
+            startForeground(NOTIF_ID, buildNotification("未能开始"))
+            TestRunStateHolder.appendLog("✗ 未能开始：未配置测试后端，且「本机运行测试」已关闭")
+            TestRunStateHolder.update(
+                TestViewModel.TestState.Error(
+                    "未配置测试后端，且「本机运行测试」已关闭。请在设置 → 测试后端填写地址，或在设置里开启本机运行测试。"
+                )
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_REDELIVER_INTENT
+        }
+
+        // ── 本地模式：端上直接跑（需「本机运行测试」开关打开）──
         // 必须在 onStartCommand 返回前 5s 内调用 startForeground，否则 Android 14 直接 ANR/崩溃
         startForeground(NOTIF_ID, buildNotification("准备中…"))
         acquireWakeLock()

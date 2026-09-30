@@ -40,6 +40,7 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
     val roleSource by vm.roleSource.collectAsState()
         val aux by vm.aux.collectAsState()
         val backendUrl by vm.backendUrl.collectAsState()
+        val localRun by vm.localRunEnabled.collectAsState()
     val state by vm.testState.collectAsState()
     val ctx = LocalContext.current
 
@@ -115,6 +116,14 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodySmall
             )
+        } else if (!localRun) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "⚠ 未配置测试后端，且「本机运行测试」已关闭（设置页可开启）。\n" +
+                    "端上跑缺少多次采样稳定性保护，默认不启用；请先到设置 → 测试后端填写地址并测试连通性。",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
 
         Spacer(Modifier.height(24.dp))
@@ -146,7 +155,9 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                             vm.startTest()
                             onStart()
                         },
-                        enabled = selected.isNotEmpty() && state !is TestViewModel.TestState.Running
+                        enabled = selected.isNotEmpty() &&
+                            state !is TestViewModel.TestState.Running &&
+                            (backendUrl.isNotBlank() || localRun)
                     ) { Text("开始测试") }
                 }
             }

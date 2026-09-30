@@ -42,8 +42,16 @@ async def run_session(
             # recursive=False 时只跑 1 轮。之前无条件调用 run_recursive（默认 10 轮），
             # 开关形同虚设——用户关了递归对抗，仍在多轮改写强攻，既烧 token 又制造假阳性。
             rounds = 10 if req.recursive else 1
-            samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "1")))
-            # ── 多次采样（稳定性实验，默认 N=1，零额外成本）──
+            samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "3")))
+            # 提醒：temperature=0 时 N 次采样高度一致、stability 恒≈1.0，别让人白烧 N 倍调用
+            if samples > 1 and float(os.environ.get("TARGET_TEMPERATURE", "0")) <= 0:
+                print(
+                    "[engine] WARN: SAMPLES_PER_CASE>1 但 TARGET_TEMPERATURE<=0 —— 被测模型无随机性，"
+                    "N 次采样结果会高度一致（stability 恒≈1.0），多花的调用换不到有效信息。"
+                    "要观察真实波动请把 TARGET_TEMPERATURE 调到 0.6~0.8。",
+                    flush=True,
+                )
+            # ── 多次采样（稳定性，默认 N=3）──
             # 每用例独立采 N 次被测回答；N>1 时逐样本裁判、按"多数裁决"定论，
             # stability = 多数派占比，低一致性（<80%）会在报告里标红。
             # 要观察到方差需被测模型 temperature>0（用 TARGET_TEMPERATURE 覆盖）；

@@ -69,6 +69,16 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         _backendToken.value = t
     }
 
+    // 「本机运行测试」总开关（默认关闭）：关闭时未配后端就不允许开测，
+    // 因为端上跑缺少后端的多次采样/稳定性保护，单次采样定论方差无人兜底。
+    private val _localRunEnabled = MutableStateFlow(repo.loadLocalRunEnabled())
+    val localRunEnabled: StateFlow<Boolean> = _localRunEnabled.asStateFlow()
+
+    fun setLocalRunEnabled(enabled: Boolean) {
+        repo.saveLocalRunEnabled(enabled)
+        _localRunEnabled.value = enabled
+    }
+
     sealed class TestState {
         object Idle : TestState()
         data class Running(val completed: Int, val total: Int) : TestState()
