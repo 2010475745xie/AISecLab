@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.xieguojian.aiseclab.core.model.Dimension
-import com.xieguojian.aiseclab.core.model.GuardMode
 import com.xieguojian.aiseclab.core.model.RoleSource
 import com.xieguojian.aiseclab.ui.TestViewModel
 
@@ -39,9 +38,8 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
     val selected by vm.selectedDimensions.collectAsState()
     val useRecursive by vm.useRecursive.collectAsState()
     val roleSource by vm.roleSource.collectAsState()
-    val aux by vm.aux.collectAsState()
-    val guard by vm.guard.collectAsState()
-    val backendUrl by vm.backendUrl.collectAsState()
+        val aux by vm.aux.collectAsState()
+        val backendUrl by vm.backendUrl.collectAsState()
     val state by vm.testState.collectAsState()
     val ctx = LocalContext.current
 
@@ -88,32 +86,6 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                 )
             }
         }
-        Text(
-            when (roleSource) {
-                RoleSource.AUTO -> "有辅助模型用辅助，否则用目标模型自身（单模型默认）"
-                RoleSource.AUX -> "只用辅助模型；未配置则退化为纯规则判定"
-                RoleSource.TARGET -> "目标模型自评/自攻，覆盖有限，仅作辅助"
-            },
-            style = MaterialTheme.typography.bodySmall
-        )
-
-        val effectiveIsTarget = roleSource == RoleSource.TARGET || (roleSource == RoleSource.AUTO && aux == null)
-        if (effectiveIsTarget) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "⚠️ 当前由目标模型自身做裁判/攻击者：自评安全性置信度较低、自攻覆盖有限，结果仅作辅助参考。",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-        if (roleSource == RoleSource.AUX && aux == null) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "已选「辅助模型」但未配置辅助模型：将退化为纯规则判定，递归不可用。",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
 
         Spacer(Modifier.height(16.dp))
         // 递归可用条件：攻击者能解析出端点。AUX 模式必须真有辅助模型；其余（TARGET / AUTO）总能用目标自身。
@@ -121,13 +93,6 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("递归对抗攻击", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    if (canRecurse) {
-                        val who = if (effectiveIsTarget) "目标模型自身" else "辅助模型"
-                        "用${who}迭代生成更强攻击 prompt"
-                    } else "无可用模型（需配辅助模型或选「目标自身」）",
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
             Switch(
                 checked = useRecursive,
@@ -135,25 +100,14 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                 enabled = canRecurse
             )
         }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "⏱ 递归对抗攻击会多轮迭代生成更强的攻击 prompt，所用时间较长，请谨慎选择。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(Modifier.height(16.dp))
-        // 护栏状态只读展示：它是"判定口径"的一部分，跑之前必须让用户看得见当前用的是哪一档。
-        val g = guard
-        val guardSummary = if (g == null) {
-            "纯规则判定（未启用本地护栏，可在上一步配置）"
-        } else when (g.mode) {
-            GuardMode.HTTP_SERVICE ->
-                "护栏：PC 侧服务 ${g.model} @ ${g.baseUrl}（阈值 ${g.threshold}）"
-            GuardMode.ON_DEVICE ->
-                "护栏：端上模型 ${g.tier.label}（${g.tier.sizeMb} MB，完全离线，阈值 ${g.threshold}）"
-            GuardMode.USER_LLM ->
-                "护栏：用户大模型 ${g.model}（自评安全，较弱信号，阈值 ${g.threshold}）"
-        }
-        Column {
-            Text("越狱判定", style = MaterialTheme.typography.titleMedium)
-            Text(guardSummary, style = MaterialTheme.typography.bodySmall)
-        }
-
         if (backendUrl.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
             Text(

@@ -41,8 +41,7 @@ import com.xieguojian.aiseclab.ui.TestViewModel
 fun ModelConfigScreen(
     vm: TestViewModel,
     onNext: () -> Unit,
-    onHistory: () -> Unit,
-    onBackend: () -> Unit
+    onHistory: () -> Unit
 ) {
     val target by vm.target.collectAsState()
     val aux by vm.aux.collectAsState()
@@ -58,7 +57,9 @@ fun ModelConfigScreen(
     var auxModel by remember { mutableStateOf(aux?.model ?: "") }
 
     var useGuard by remember { mutableStateOf(guard != null) }
-    var guardMode by remember { mutableStateOf(guard?.mode ?: GuardMode.HTTP_SERVICE) }
+    var guardMode by remember {
+        mutableStateOf(guard?.mode?.takeIf { it != GuardMode.HTTP_SERVICE } ?: GuardMode.ON_DEVICE)
+    }
     var guardBaseUrl by remember { mutableStateOf(guard?.baseUrl ?: GuardProfile.DEFAULT_BASE_URL) }
     var guardModel by remember { mutableStateOf(guard?.model ?: GuardProfile.DEFAULT_MODEL) }
     var guardApiKey by remember { mutableStateOf(guard?.apiKey ?: "") }
@@ -130,7 +131,7 @@ fun ModelConfigScreen(
             Spacer(Modifier.height(12.dp))
 
             // ---- 跑在哪：这是唯一影响"判定能力"的开关，放最前面 ----
-            GuardMode.values().forEach { m ->
+            GuardMode.values().filter { it != GuardMode.HTTP_SERVICE }.forEach { m ->
                 Row(verticalAlignment = Alignment.Top) {
                     RadioButton(selected = guardMode == m, onClick = { guardMode = m })
                     Column(modifier = Modifier.padding(top = 12.dp)) {
@@ -272,23 +273,9 @@ fun ModelConfigScreen(
                 }
 
                 GuardMode.USER_LLM -> {
-                    Text("用「裁判来源」所选模型做安全分类", style = MaterialTheme.typography.bodyMedium)
-                    Text(
-                        "无需下载护栏权重；默认用目标模型自身（单模型用户），若配了辅助模型且「裁判来源」选辅助则用它。" +
-                            "自评安全性是较弱信号，仅作辅助，关键用例建议仍用 XGuard 护栏复核。",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    // 用「裁判来源」所选模型做安全分类：无额外配置项（说明文字已按需求移除）
                 }
             }
-        }
-
-        Spacer(Modifier.height(24.dp))
-        // ---- 测试后端：已独立成页，点进去设置（见 BackendConfigScreen）----
-        OutlinedButton(
-            onClick = onBackend,
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) {
-            Text("测试后端设置（可选）", style = MaterialTheme.typography.titleMedium)
         }
 
         Spacer(Modifier.height(28.dp))
