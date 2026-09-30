@@ -1,0 +1,28 @@
+# ── Build outputs ──
+/build/
+/app/build/
+build/
+
+# ── Gradle ──
+.gradle/
+
+# ── IDE ──
+.idea/
+*.iml
+
+# ── Local config (SDK path etc., must not be shared) ──
+local.properties
+
+# ── Packaging artifacts ──
+aiseclab-backend.zip
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ── OS junk ──
+.DS_Store
+Thumbs.db

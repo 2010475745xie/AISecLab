@@ -1,0 +1,53 @@
+{
+  "repo": "mradermacher/YuFeng-XGuard-Reason-0.6B-GGUF",
+  "files": {
+    "YuFeng-XGuard-Reason-0.6B.IQ4_XS.gguf": {
+      "sha256": "7a5ae105981adbfbf17f416e4109d9c82765ac37455f78d76925410830c3ee48",
+      "size": 451929216
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q2_K.gguf": {
+      "sha256": "bac263a3f8c9c64f602cad2e89f110ef484229aba558d5e811d46f5c4e0e7c89",
+      "size": 347286656
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q3_K_L.gguf": {
+      "sha256": "62bbcd900d95e1127f62bcc93c141c64417dba5dc87d0f58591a3a352186cba4",
+      "size": 435341440
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q3_K_M.gguf": {
+      "sha256": "1fd3f97a6ea06ef95d3a51018a6c2056dac849a6aae19af4d2cece905ccfff4e",
+      "size": 413976704
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q3_K_S.gguf": {
+      "sha256": "2268c44571dcb7259d54f6d67b53bd6e0470ed064cb2391edc0a1e359e747613",
+      "size": 389924992
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q4_K_M.gguf": {
+      "sha256": "c9766937ea76717be85261fe5518d328d4209fecc291bfa24d18b521d897adde",
+      "size": 484217984
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q4_K_S.gguf": {
+      "sha256": "9287726cf84a400e840e977ca2b92a2e3dac7f368ad326822a2f883d4e8a053a",
+      "size": 470783104
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q5_K_M.gguf": {
+      "sha256": "b518ca729b378035ca1f187e517a5dc19b50964814617bd09328dd13f83f1db9",
+      "size": 551376000
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q5_K_S.gguf": {
+      "sha256": "7ce26f566d61344f2a87cde06f46b23991f67929f8fbafc27d8fe9388dd4451a",
+      "size": 543577216
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q6_K.gguf": {
+      "sha256": "f8a8cf627f0d1d4f6c1f5912547f61bd1f6b70162970e7a24d939e158749df31",
+      "size": 622731392
+    },
+    "YuFeng-XGuard-Reason-0.6B.Q8_0.gguf": {
+      "sha256": "3c0d0f65c71945c2ac6c306aa031b77ee8a65874d30c010ccd0ddbcf51306f23",
+      "size": 804751488
+    },
+    "YuFeng-XGuard-Reason-0.6B.f16.gguf": {
+      "sha256": "0235f08c1021de6aab70722c524cafa8a0bc6ff4d63f6acdccb0c8b321d393b6",
+      "size": 1509345408
+    }
+  }
+}

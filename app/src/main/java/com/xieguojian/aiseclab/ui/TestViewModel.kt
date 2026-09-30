@@ -1,0 +1,292 @@
+package com.xieguojian.aiseclab.ui
+
+import android.app.Application
+import android.content.Intent
+import android.os.Environment
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.xieguojian.aiseclab.core.judge.guard.GuardModelDownloader
+import com.xieguojian.aiseclab.core.judge.guard.OnDeviceGuardModel
+import com.xieguojian.aiseclab.core.model.AuxModelProfile
+import com.xieguojian.aiseclab.core.model.Dimension
+import com.xieguojian.aiseclab.core.model.GuardProfile
+import com.xieguojian.aiseclab.core.model.ModelProfile
+import com.xieguojian.aiseclab.core.model.RoleSource
+import com.xieguojian.aiseclab.core.model.Report
+import com.xieguojian.aiseclab.core.repo.HistoryRepository
+import com.xieguojian.aiseclab.core.repo.ProfileRepository
+import com.xieguojian.aiseclab.core.report.ReportGenerator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import java.io.File
+
+class TestViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val repo = ProfileRepository(app)
+
+    private val _target = MutableStateFlow(repo.loadTarget())
+    val target: StateFlow<ModelProfile?> = _target.asStateFlow()
+
+    private val _aux = MutableStateFlow(repo.loadAux())
+    val aux: StateFlow<AuxModelProfile?> = _aux.asStateFlow()
+
+    private val _guard = MutableStateFlow(repo.loadGuard())
+    val guard: StateFlow<GuardProfile?> = _guard.asStateFlow()
+
+    private val _selectedDimensions = MutableStateFlow<Set<Dimension>>(Dimension.values().toSet())
+    val selectedDimensions: StateFlow<Set<Dimension>> = _selectedDimensions.asStateFlow()
+
+    private val _useRecursive = MutableStateFlow(false)
+    val useRecursive: StateFlow<Boolean> = _useRecursive.asStateFlow()
+
+    private val _roleSource = MutableStateFlow(repo.loadRoleSource())
+    val roleSource: StateFlow<RoleSource> = _roleSource.asStateFlow()
+
+    fun setRoleSource(src: RoleSource) {
+        repo.saveRoleSource(src)
+        _roleSource.value = src
+    }
+
+    // 测试后端地址（可选）：空 = 端上本地跑；非空 = 委托后端（见 TestRunService 分支）。
+    private val _backendUrl = MutableStateFlow(repo.loadBackendUrl())
+    val backendUrl: StateFlow<String> = _backendUrl.asStateFlow()
+
+    private val _backendToken = MutableStateFlow(repo.loadBackendToken())
+    val backendToken: StateFlow<String> = _backendToken.asStateFlow()
+
+    fun saveBackendUrl(url: String) {
+        val u = url.trim()
+        repo.saveBackendUrl(u)
+        _backendUrl.value = u
+    }
+
+    fun saveBackendToken(token: String) {
+        val t = token.trim()
+        repo.saveBackendToken(t)
+        _backendToken.value = t
+    }
+
+    sealed class TestState {
+        object Idle : TestState()
+        data class Running(val completed: Int, val total: Int) : TestState()
+        data class Done(val report: Report) : TestState()
+        data class Error(val message: String) : TestState()
+    }
+
+    private val _testState = MutableStateFlow<TestState>(TestState.Idle)
+    val testState: StateFlow<TestState> = _testState.asStateFlow()
+
+    /** 测试进程日志（RunScreen 终端窗口内容），镜像自 [TestRunStateHolder.log]。 */
+    private val _testLog = MutableStateFlow<List<String>>(emptyList())
+    val testLog: StateFlow<List<String>> = _testLog.asStateFlow()
+
+    /**
+     * 首次启动引导页标记（读自 [ProfileRepository]，持久化）。
+     * `MainActivity` 用它决定首屏是引导页还是首页。
+     */
+    private val _onboarded = MutableStateFlow(repo.loadOnboarded())
+    val onboarded: StateFlow<Boolean> = _onboarded.asStateFlow()
+
+    /** 走完引导页调用：落盘 + 翻内存标志。 */
+    fun finishOnboarding() {
+        repo.saveOnboarded()
+        _onboarded.value = true
+    }
+
+    // ------------------------------------------------------------------
+    // 历史报告（服务跑完时由 TestRunService 落盘，这里只读/删）
+    // ------------------------------------------------------------------
+
+    private val historyRepo by lazy { HistoryRepository(getApplication()) }
+
+    private val _history = MutableStateFlow<List<Report>>(emptyList())
+    val history: StateFlow<List<Report>> = _history.asStateFlow()
+
+    /** 重读历史列表。进历史页、或收到 Done（新报告落盘后）时调用。 */
+    fun refreshHistory() {
+        viewModelScope.launch(Dispatchers.IO) { _history.value = historyRepo.list() }
+    }
+
+    fun deleteHistory(timestamp: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyRepo.delete(timestamp)
+            _history.value = historyRepo.list()
+        }
+    }
+
+    fun clearHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            historyRepo.clear()
+            _history.value = emptyList()
+        }
+    }
+
+    fun saveTarget(name: String, baseUrl: String, apiKey: String, model: String) {
+        val p = ModelProfile(id = "target", name = name, baseUrl = baseUrl, apiKey = apiKey, model = model)
+        repo.saveTarget(p)
+        _target.value = p
+    }
+
+    fun saveAux(baseUrl: String?, apiKey: String?, model: String?) {
+        val aux = if (baseUrl.isNullOrBlank() || apiKey.isNullOrBlank() || model.isNullOrBlank()) null
+        else AuxModelProfile(baseUrl.trim(), apiKey.trim(), model.trim())
+        repo.saveAux(aux)
+        _aux.value = aux
+    }
+
+    /**
+     * 保存护栏配置。传 null = 关闭护栏（退化为纯规则判定）。
+     *
+     * 与 [saveAux] 的差别：**apiKey 可以为空** —— 本地 llama-server 默认不校验；
+     * 而且 `OpenAiCompatibleClient` 只在 apiKey 非空时才加 Authorization，
+     * 不会发出 `Bearer ` 这种空令牌把本地服务打成 401。
+     */
+    fun saveGuard(profile: GuardProfile?) {
+        val g = profile?.let {
+            it.copy(
+                baseUrl = it.baseUrl.trim().trimEnd('/'),
+                apiKey = it.apiKey.trim(),
+                model = it.model.trim()
+            )
+        }
+        repo.saveGuard(g)
+        _guard.value = g
+    }
+
+    // ------------------------------------------------------------------
+    // 端上模型下载
+    // ------------------------------------------------------------------
+
+    private val _guardDownload =
+        MutableStateFlow<GuardModelDownloader.State>(GuardModelDownloader.State.Idle)
+
+    /** 端上模型下载进度。UI 直接订阅；换档位会重置。 */
+    val guardDownload: StateFlow<GuardModelDownloader.State> = _guardDownload.asStateFlow()
+
+    /**
+     * 已就绪（存在 + 大小与官方一致）的档位 label 集合。
+     *
+     * 用集合而不是"当前档位是否就绪"：用户可能在几个档位间来回试，
+     * 每次都去 stat 一次文件没必要，而且 `isReady` 要读 filesDir（IO）。
+     */
+    private val _readyTiers = MutableStateFlow<Set<String>>(emptySet())
+    val readyTiers: StateFlow<Set<String>> = _readyTiers.asStateFlow()
+
+    init {
+        refreshReadyTiers()
+        // 测试协程现在跑在前台服务进程里，进度经 TestRunStateHolder 中转，这里镜像到 UI 订阅的 _testState
+        viewModelScope.launch {
+            TestRunStateHolder.state.collect {
+                _testState.value = it
+                // 服务侧把新报告写进历史了，收到 Done 时顺手刷新列表
+                if (it is TestState.Done) refreshHistory()
+            }
+        }
+        viewModelScope.launch {
+            TestRunStateHolder.log.collect { _testLog.value = it }
+        }
+    }
+
+    /** 重扫模型目录。下载完成、删除后调用。 */
+    fun refreshReadyTiers() {
+        val app = getApplication<Application>()
+        _readyTiers.value = OnDeviceGuardModel.TIERS
+            .filter { OnDeviceGuardModel.isReady(app, it) }
+            .map { it.label }
+            .toSet()
+    }
+
+    /**
+     * 下载端上护栏模型。可重复调用（续传）。已在下就会直接返回，避免并发写同一个文件。
+     */
+    fun downloadGuardModel(tier: OnDeviceGuardModel.Tier) {
+        // 已经在下载中就不再起第二条流：两个流写同一个 RandomAccessFile 会写出损坏文件
+        if (_guardDownload.value is GuardModelDownloader.State.Progress) return
+        if (_guardDownload.value is GuardModelDownloader.State.Verifying) return
+
+        viewModelScope.launch {
+            GuardModelDownloader(getApplication()).download(tier).collect { st ->
+                _guardDownload.value = st
+                if (st is GuardModelDownloader.State.Done) refreshReadyTiers()
+            }
+        }
+    }
+
+    /** 删除某个档位的模型文件，腾出空间。 */
+    fun deleteGuardModel(tier: OnDeviceGuardModel.Tier) {
+        if (_guardDownload.value is GuardModelDownloader.State.Progress) return
+        OnDeviceGuardModel.file(getApplication(), tier).delete()
+        _guardDownload.value = GuardModelDownloader.State.Idle
+        refreshReadyTiers()
+    }
+
+    fun toggleDimension(dim: Dimension, enabled: Boolean) {
+        _selectedDimensions.value =
+            if (enabled) _selectedDimensions.value + dim else _selectedDimensions.value - dim
+    }
+
+    fun setUseRecursive(enabled: Boolean) {
+        _useRecursive.value = enabled
+    }
+
+    /**
+     * 启动一轮测试。
+     *
+     * 不再在 viewModelScope 里直接跑协程——那样切后台 / 息屏会被系统回收，用户看到的就是
+     * "跑着跑着断了"。改为起一个前台服务（[TestRunService]），服务进程 + 部分唤醒锁保活，
+     * 进度/结果经 [TestRunStateHolder] 回写，本 VM 在 init 里 collect 后镜像给 UI。
+     *
+     * 配置传递：target/aux/guard/roleSource 都在 EncryptedSharedPreferences 里（持久化），
+     * 服务自己读；唯独 dimensions 和 recursive 只在 VM 内存，从 Intent 带过去。
+     */
+    fun startTest() {
+        if (_target.value == null) return
+        if (TestRunStateHolder.isRunning) return
+        val intent = Intent(getApplication(), TestRunService::class.java).apply {
+            putIntegerArrayListExtra(
+                TestRunService.EXTRA_DIMENSIONS,
+                ArrayList(_selectedDimensions.value.map { it.ordinal })
+            )
+            putExtra(TestRunService.EXTRA_RECURSIVE, _useRecursive.value)
+        }
+        getApplication<Application>().startForegroundService(intent)
+    }
+
+    /**
+     * 导出 HTML。传 [report] 则导出指定报告（历史记录回看），缺省导出本轮当前报告。
+     */
+    fun exportHtml(report: Report? = null): File? {
+        val r = report ?: (_testState.value as? TestState.Done)?.report ?: return null
+        val html = ReportGenerator.toHtml(r)
+        // 写到应用外部 files/Download —— 用户能在「文件管理」里直接找到，无需 root。
+        // getExternalFilesDir 不需要任何存储权限（App 专属外部目录），downloadDir 为 null 时回退 cacheDir。
+        val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: getApplication<Application>().cacheDir
+        val file = File(dir, "aiseclab_report_${r.timestamp}.html")
+        file.writeText(html)
+        return file
+    }
+
+    /** 导出 Markdown。传 [report] 则导出指定报告（历史记录回看），缺省导出本轮当前报告。 */
+    fun exportMarkdown(report: Report? = null): File? {
+        val r = report ?: (_testState.value as? TestState.Done)?.report ?: return null
+        val md = ReportGenerator.toMarkdown(r)
+        val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: getApplication<Application>().cacheDir
+        val file = File(dir, "aiseclab_report_${r.timestamp}.md")
+        file.writeText(md)
+        return file
+    }
+
+    fun reset() {
+        // 清掉状态桥，若服务还在跑（极端情况）也一并停掉
+        TestRunStateHolder.reset()
+        _testState.value = TestState.Idle
+        runCatching {
+            getApplication<Application>().stopService(Intent(getApplication(), TestRunService::class.java))
+        }
+    }
+}

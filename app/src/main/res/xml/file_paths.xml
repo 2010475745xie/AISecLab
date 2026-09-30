@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 导出报告写到应用的外部 files/Download 目录，经 FileProvider 分享给其它 App 打开 -->
+    <external-files-path name="exports" path="Download/" />
+</paths>

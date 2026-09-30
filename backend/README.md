@@ -89,7 +89,7 @@ sudo certbot --nginx -d api.your-domain.com
 ## 5. 端侧怎么连
 
 安卓端 `ProfileRepository` 增加「后端地址」配置项，改为：
-- 创建任务：`POST https://api.your-domain.com/v1/sessions`（body 带被测模型 key，仅本次任务内存留存）
+- 创建任务：`POST https://api.your-domain.com/v1/sessions`（body 带被测模型 key 与裁判模型 judge，仅本次任务内存留存）
 - 进度：`GET /v1/sessions/{id}/stream`（EventSource 读 SSE）
 - 报告：`GET /v1/reports/{id}`
 
@@ -114,7 +114,7 @@ docker compose up -d --build  # 会自动按 Dockerfile 构建镜像并起服务
 
 要点：
 
-- **裁判模型必填**：`JUDGE_BASE_URL` 与 `JUDGE_MODEL` 不填，服务能起（`/health` 正常），但一调裁判就返回 503 并报"裁判模型未配置"。这是故意设计——避免空配置静默失败。
+- **裁判模型必填，但可由客户端带来**：服务端 `.env` 的 `JUDGE_BASE_URL`/`JUDGE_MODEL` 不填，服务仍能起（`/health` 正常）。但比赛/共享服务器通常不预置裁判模型——此时由安卓端在 `POST /v1/sessions` 请求体里带 `judge`（被测模型自带裁判，BYOK 委托）即可，后端优先用请求体里的裁判、没有才回退到服务器环境变量。二者皆无才返回 503。这是故意设计——避免空配置静默失败。
 - **鉴权建议开**：在 `.env` 设 `API_TOKEN`，除 `/health` 外所有接口都要 `Authorization: Bearer <token>`。共享/公网服务器一定要开，否则谁都能调你的裁判模型额度。中间件是原始 ASGI 实现，**不缓冲响应体，SSE 长连接不受影响**。
 - **容器非 root 运行**，默认 512M 内存上限（单用户足够，OOM 就调到 1G）。
 - **健康检查**内置：`docker compose ps` 看 STATUS 是否为 `healthy`；或 `curl http://<服务器>:8000/health`。

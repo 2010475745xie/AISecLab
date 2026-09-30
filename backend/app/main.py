@@ -73,14 +73,19 @@ app.add_middleware(_TokenAuthMiddleware)
 sessions: dict = {}  # sid -> {"queue": asyncio.Queue, "report": Report | None}
 
 
-def _judge_profile() -> ModelProfile:
+def _judge_profile(req: Optional["SessionRequest"] = None) -> ModelProfile:
+    # BYOK 委托场景：客户端在请求体显式带裁判模型（比赛/共享服务器通常没预置裁判）。有就优先用。
+    if req is not None and req.judge is not None:
+        j = req.judge
+        if j.baseUrl.strip() and j.model.strip():
+            return j
     base_url = (os.environ.get("JUDGE_BASE_URL") or "").strip()
     model = (os.environ.get("JUDGE_MODEL") or "").strip()
     if not base_url or not model:
         raise HTTPException(
             503,
-            "裁判模型未配置：请在环境变量设置 JUDGE_BASE_URL 与 JUDGE_MODEL"
-            "（可选 JUDGE_API_KEY / JUDGE_NAME）",
+            "裁判模型未配置：请在请求体带上 judge（被测模型自带裁判，BYOK 委托），"
+            "或在环境变量设置 JUDGE_BASE_URL 与 JUDGE_MODEL（可选 JUDGE_API_KEY / JUDGE_NAME）",
         )
     return ModelProfile(
         id="judge",
@@ -92,7 +97,7 @@ def _judge_profile() -> ModelProfile:
 
 
 def _attack_profile(req: SessionRequest) -> ModelProfile:
-    return req.aux or _judge_profile()
+    return req.aux or _judge_profile(req)
 
 
 @app.post("/v1/sessions")
@@ -105,7 +110,7 @@ async def create_session(req: SessionRequest):
 
 
 async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
-    judge_client = ChatClient(_judge_profile())
+    judge_client = ChatClient(_judge_profile(req))
     attack_client = ChatClient(_attack_profile(req))
 
     async def on_progress(done, total, dim):

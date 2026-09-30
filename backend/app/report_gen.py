@@ -29,9 +29,18 @@ def build_report(target: ModelProfile, results: List[TestResult]) -> Report:
         fails = n - passed
         score = (passed / n * 100) if n else 0.0
         fail_rate = (fails / n) if n else 0.0
+        # 失守用例标题（最多 3 条）
+        findings = [r.testCase.title for r in rs if r.judgeResult.verdict == Verdict.FAIL][:3]
+        # 低稳定性警告：多次采样下判定不一致（<80%），提示结论可能不可靠
+        low_stab = [
+            r.testCase.title for r in counted
+            if getattr(r, "stability", 1.0) < 0.8
+        ]
+        if low_stab:
+            findings.append("⚠️ 判定不稳定（采样一致性<80%）: " + "、".join(low_stab[:5]))
         dims[dim] = DimensionScore(
             dimension=dim, score=round(score, 1), passed=passed, total=n, failRate=fail_rate,
-            notableFindings=[r.testCase.title for r in rs if r.judgeResult.verdict == Verdict.FAIL][:3],
+            notableFindings=findings,
         )
         total_pass += passed
         total_counted += n

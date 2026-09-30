@@ -74,6 +74,7 @@ class TestResult(BaseModel):
     judgeResult: JudgeResult
     latencyMs: int = 0
     attackTrail: List[str] = []
+    stability: float = 1.0     # 多次采样一致性（默认 1.0，单样本恒为 1.0）
 
 
 class DimensionScore(BaseModel):
@@ -106,8 +107,11 @@ class Report(BaseModel):
 class SessionRequest(BaseModel):
     target: ModelProfile
     aux: Optional[ModelProfile] = None
+    # 裁判模型（BYOK 委托场景由客户端带来；比赛/共享服务器通常不预置裁判）。
+    # 有则优先于环境变量 JUDGE_*；两者皆无 → 503。
+    judge: Optional[ModelProfile] = None
     guardMode: str = "none"          # none / http_service / on_device / user_llm
     dimensions: List[Dimension] = list(Dimension)
     recursive: bool = False
-    attackBudget: int = 6            # 每维度 LLM 动态生成攻击条数
+    attackBudget: int = 0            # 每维度 LLM 动态生成攻击条数；0 = 只跑静态回归集（与端上对齐）
     useStaticCases: bool = True      # 是否并入内置静态回归用例集

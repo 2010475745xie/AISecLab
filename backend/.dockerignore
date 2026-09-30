@@ -1,0 +1,8 @@
+# 构建上下文排除：避免把缓存/密钥/本地数据带进镜像
+.env
+__pycache__/
+*.py[cod]
+data/
+*.zip
+.git
+.gitignore

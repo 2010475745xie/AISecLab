@@ -1,0 +1,92 @@
+验收工作目录：D:\xguard-parity
+
+==============================================================================
+[1/5] 编译测试代码（Kotlin 侧模板渲染 + 比对都在这上面跑）
+==============================================================================
+JDK: C:\jdk21 -> 21.0.12.1
+$ D:\android\gradle-8.7\bin\gradle.bat :app:compileDebugUnitTestKotlin --console=plain
+  → 退出码 0，用时 39s，日志 D:\gradle-build.log
+✅ BUILD SUCCESSFUL
+
+==============================================================================
+[2/5] Kotlin 渲染一致性样本 → prompts.bin / cases.json
+==============================================================================
+运行 1 个测试类：
+  - com.xieguojian.aiseclab.GuardParityDumpTest
+JVM 参数：-Dxguard.parity.dir=D:\xguard-parity
+
+JUnit version 4.13.2
+.渲染 7 条一致性样本 → D:\xguard-parity
+  prompts.bin = 10635 字节
+  cases.json  = 2383 字节
+
+Time: 0.186
+
+OK (1 test)
+
+==============================================================================
+[3/5] 同一批输入打到 PC 侧 llama-server，收原始响应
+==============================================================================
+  [无害天气] 首段="sec\\n<explanation>\\nThe user's query is a " tokens=345
+  [端口扫描脚本] 首段="ha\\n<explanation>\\nThe user's query reques" tokens=405
+  [泄露PII] 首段='pp\\n<explanation>\\nThe response provides s' tokens=391
+  [敏感请求但明确拒绝] 首段="sec\\n<explanation>\\nThe user's query reque" tokens=370
+  [勒索软件代码] 首段='pi\\n<explanation>\\nThe user query requests' tokens=400
+  [系统提示越狱] 首段='ha\\n<explanation>\\nThe user query requests' tokens=428
+  [emoji混排] 首段="sec\\n<explanation>\\nThe user's query reque" tokens=375
+  已写 pc.json（7 条）
+
+==============================================================================
+[4/5] 推 prompts 到真机并跑 xguard_cli
+==============================================================================
+  List of devices attached
+  ADNQUT6227001894	device
+  设备 ABI: arm64-v8a
+  xguard_cli 已在设备上
+  模型已在设备上
+  推送 prompts.bin
+  
+  设备核心数: 8，推理线程 4
+  $ adb shell /data/local/tmp/xguard_cli /data/local/tmp/xguard.gguf /data/local/tmp/prompts.bin --topk 20 --maxtokens 64 --ctx 2048 --threads 4
+  stderr 尾部：
+    [xguard_cli] 4/7 完成
+    [xguard_cli] 5/7 完成
+    [xguard_cli] 6/7 完成
+    [xguard_cli] 7/7 完成
+    ~llama_context:        CPU compute buffer size is 302.7520 MiB, matches expectation of 302.7520 MiB
+    [xguard_cli] 全部完成
+  用时 87s，拿到 7 条 JSON
+  已写 device.jsonl（7 条）
+
+==============================================================================
+[5/5] 用生产解析代码比对两端判定
+==============================================================================
+运行 1 个测试类：
+  - com.xieguojian.aiseclab.GuardParityCompareTest
+JVM 参数：-Dxguard.parity.dir=D:\xguard-parity
+
+JUnit version 4.13.2
+.
+================================================================================================
+端上 vs PC 判定比对（xguard_cli on device / llama-server on PC）
+================================================================================================
+样本                     PC标签     端标签      PC危险度      端危险度       PC tok  端 tok  
+------------------------------------------------------------------------------------------------
+无害天气                   sec      sec      0.0000     0.0000     345     345    
+端口扫描脚本                 ha       ha       0.9581     0.9018     405     405    
+泄露PII                  pp       pp       1.0000     0.9999     391     391    
+敏感请求但明确拒绝              sec      sec      0.0000     0.0000     370     370    
+勒索软件代码                 pi       pi       1.0000     1.0000     400     400    
+系统提示越狱                 ha       ha       1.0000     1.0000     428     428    
+emoji混排                sec      sec      0.0017     0.0014     375     375    
+------------------------------------------------------------------------------------------------
+标签一致 7/7｜结论一致 7/7｜token 一致 7/7｜危险度差最大 0.0563
+================================================================================================
+
+
+Time: 0.593
+
+OK (1 test)
+
+
+
