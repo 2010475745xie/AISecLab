@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -23,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -70,20 +72,50 @@ fun BackendConfigScreen(
         )
         Spacer(Modifier.height(20.dp))
 
-        OutlinedTextField(
-            urlField, { v ->
-                urlField = v
-                vm.saveBackendUrl(v)   // 即时保存
-            },
-            label = { Text("后端地址（局域网 http://192.168.x.x:8000；公网 https://...）") },
-            modifier = Modifier.fillMaxWidth()
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                urlField, { v ->
+                    urlField = v
+                    vm.saveBackendUrl(v)   // 即时保存
+                },
+                label = { Text("后端地址（如 http://192.168.1.9:8000）") },
+                singleLine = true,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    scope.launch {
+                        pinging = true
+                        pingResult = try {
+                            val ok = BackendClient().ping(urlField, tokenField)
+                            ok to (if (ok) "✓ 连通正常" else "✗ 无法连接（检查地址 / 端口 / 网络 / 令牌）")
+                        } catch (e: Exception) {
+                            false to "✗ ${e.message ?: e.javaClass.simpleName}"
+                        } finally {
+                            pinging = false
+                        }
+                    }
+                },
+                enabled = urlField.isNotBlank() && !pinging,
+                modifier = Modifier.height(56.dp)
+            ) { Text(if (pinging) "…" else "测试") }
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             "scheme 要与后端实际协议一致：局域网自测填 http://，公网 HTTPS 服务器填 https://；" +
-                "填反了会报 ssl: wrong version number。结尾不要带 /v1。",
+                "填反了会报 ssl: wrong version number。结尾不要带 /v1。点右侧「测试」探测后端是否连通。",
             style = MaterialTheme.typography.bodySmall
         )
+        pingResult?.let { (ok, msg) ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                msg,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+        }
+
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             tokenField, { v ->
@@ -95,34 +127,6 @@ fun BackendConfigScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth()
         )
-
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = {
-                scope.launch {
-                    pinging = true
-                    pingResult = try {
-                        val ok = BackendClient().ping(urlField, tokenField)
-                        ok to (if (ok) "✓ 连通正常" else "✗ 无法连接（检查地址 / 端口 / 网络 / 令牌）")
-                    } catch (e: Exception) {
-                        false to "✗ ${e.message ?: e.javaClass.simpleName}"
-                    } finally {
-                        pinging = false
-                    }
-                }
-            },
-            enabled = urlField.isNotBlank() && !pinging,
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text(if (pinging) "测试中…" else "测试连通性", style = MaterialTheme.typography.titleMedium) }
-
-        pingResult?.let { (ok, msg) ->
-            Spacer(Modifier.height(10.dp))
-            Text(
-                msg,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-            )
-        }
 
         Spacer(Modifier.height(16.dp))
         if (urlField.isNotBlank() || tokenField.isNotBlank()) {
