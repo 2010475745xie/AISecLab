@@ -96,6 +96,22 @@ class BackendClient {
         getReport(baseUrl, sid, token)
     }
 
+    /**
+     * 连通性探测：GET {baseUrl}/health。
+     * /health 是后端公开存活探针（中间件不校验 token），返回 2xx 即视为后端在线。
+     * 供「测试后端」设置页的「测试连通性」按钮使用，让用户填完地址立刻验证能否连上。
+     */
+    suspend fun ping(baseUrl: String, token: String?): Boolean = withContext(Dispatchers.IO) {
+        if (baseUrl.isBlank()) return@withContext false
+        val req = Request.Builder()
+            .url(join(baseUrl, "/health"))
+            .get()
+            .apply { auth(this, token) }
+            .build()
+        runCatching { http.newCall(req).execute().use { it.isSuccessful } }
+            .getOrDefault(false)
+    }
+
     private fun auth(builder: Request.Builder, token: String?) {
         if (!token.isNullOrBlank()) builder.addHeader("Authorization", "Bearer $token")
     }

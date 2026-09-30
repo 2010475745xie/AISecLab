@@ -2,6 +2,7 @@ package com.xieguojian.aiseclab.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,12 +21,15 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.ui.TestViewModel
+import kotlinx.coroutines.launch
 
 /**
  * 专门的「测试后端」设置页。
@@ -47,6 +51,9 @@ fun BackendConfigScreen(
 
     var urlField by remember { mutableStateOf(backendUrl) }
     var tokenField by remember { mutableStateOf(backendToken) }
+    var pinging by remember { mutableStateOf(false) }
+    var pingResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -88,6 +95,34 @@ fun BackendConfigScreen(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = {
+                scope.launch {
+                    pinging = true
+                    pingResult = try {
+                        val ok = BackendClient().ping(urlField, tokenField)
+                        ok to (if (ok) "✓ 连通正常" else "✗ 无法连接（检查地址 / 端口 / 网络 / 令牌）")
+                    } catch (e: Exception) {
+                        false to "✗ ${e.message ?: e.javaClass.simpleName}"
+                    } finally {
+                        pinging = false
+                    }
+                }
+            },
+            enabled = urlField.isNotBlank() && !pinging,
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) { Text(if (pinging) "测试中…" else "测试连通性", style = MaterialTheme.typography.titleMedium) }
+
+        pingResult?.let { (ok, msg) ->
+            Spacer(Modifier.height(10.dp))
+            Text(
+                msg,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+        }
 
         Spacer(Modifier.height(16.dp))
         if (urlField.isNotBlank() || tokenField.isNotBlank()) {

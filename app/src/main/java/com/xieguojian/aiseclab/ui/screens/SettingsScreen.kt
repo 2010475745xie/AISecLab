@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -22,13 +21,12 @@ import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.TestViewModel
 
 /**
- * 「设置」底部标签页（对标微信「我」）：模型与护栏配置、测试后端入口，
- * 并显示当前已配置的目标模型。本身不直接跑测试，点「模型与护栏配置」进 CONFIG 表单。
+ * 「设置」底部标签页（对标微信「我」）：显示当前目标模型、测试后端入口。
+ * 模型与护栏配置已并入「新建测试」的 CONFIG 表单，本页只保留后端入口。
  */
 @Composable
 fun SettingsScreen(
     vm: TestViewModel,
-    onModelConfig: () -> Unit,
     onBackend: () -> Unit
 ) {
     val target by vm.target.collectAsState()
@@ -46,18 +44,12 @@ fun SettingsScreen(
                 Text("当前目标模型", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    target?.let { modelLabel(it) } ?: "尚未配置 —— 点下方「模型与护栏配置」填写",
+                    target?.let { modelLabel(it) } ?: "尚未配置 —— 在首页「+」新建测试中填写",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
-
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onModelConfig,
-            modifier = Modifier.fillMaxWidth().height(52.dp)
-        ) { Text("模型与护栏配置", style = MaterialTheme.typography.titleMedium) }
 
         Spacer(Modifier.height(12.dp))
         OutlinedButton(

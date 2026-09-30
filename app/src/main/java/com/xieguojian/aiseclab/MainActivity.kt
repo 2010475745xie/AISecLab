@@ -208,7 +208,6 @@ fun AISecLabApp(vm: TestViewModel = viewModel()) {
                 )
                 Screen.SETTINGS -> SettingsScreen(
                     vm,
-                    onModelConfig = { configFrom = Screen.SETTINGS; screen = Screen.CONFIG },
                     onBackend = { backendFrom = Screen.SETTINGS; screen = Screen.BACKEND }
                 )
                 // 历史已合并进「测试」页：HISTORY 不再作为独立标签页，这里兜底不处理
