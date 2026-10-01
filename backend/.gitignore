@@ -8,3 +8,8 @@ __pycache__/
 # 本地持久化数据目录（容器运行时绑定挂载，不入库，仅保留占位）
 data/*
 !data/.gitkeep
+
+# PyInstaller 构建产物（冻结 exe 用，产物在 dist/ 不入库）
+build/
+dist/
+*.spec
