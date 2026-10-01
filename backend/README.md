@@ -2,6 +2,24 @@
 
 FastAPI 后端：调被测模型 / 攻击模型 / 裁判模型，跑规则 + LLM 三角色裁判，输出报告 JSON 供端侧渲染。
 
+## 0. 没有 Python 环境也能部署（推荐给普通用户）
+
+### 方案 A：Windows 免安装 exe（双击即用，电脑无需装 Python）
+
+下载 `aiseclab-backend-standalone-win.zip`，解压后双击里面的 `run.bat` 即可：
+
+- 首次运行会自动用 `.env.example` 生成 `.env`；
+- 自动起服务、等待 `/health` 就绪后，打印手机 App「设置 → 测试后端」要填的地址：
+  - 本机 / 模拟器：`http://localhost:8000`
+  - 手机同 Wi-Fi：`http://<你的局域网IP>:8000`  ← 手机一般填这个（需同一 Wi-Fi）
+- 按 Ctrl+C 停止。
+
+> exe 已内置 Python 解释器与全部依赖，电脑上**不需要安装任何东西**。要启用服务端裁判，编辑解压目录里的 `.env` 填 `JUDGE_*`；不填也能起服务，只是运行时裁判会返回 503（可在 App 请求体自带 judge 规避）。
+
+### 方案 B：Docker（任意系统，推荐服务器 / 云主机）
+
+只需安装 Docker Desktop，不需要 Python。见 §2。
+
 ## 1. 本地跑（开发）
 
 ```bash
