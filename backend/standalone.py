@@ -6,7 +6,7 @@ AISecLab 后端「免安装」启动器（被 PyInstaller 冻结成 exe 后使�
 与 deploy.py 的区别：
   - 不依赖系统已装 Python（exe 自带解释器与依赖）
   - 显式 `from app.main import app` 让 PyInstaller 能静态收集 app 包
-  - 仍会在首次运行时用 .env.example 初始化 .env，并打印手机要填的地址
+  - 首次运行用 .env.example 初始化 .env，并打印手机要填的地址
 """
 
 import os
@@ -15,9 +15,6 @@ import socket
 import shutil
 import time
 import urllib.request
-
-# 冻结后 sys.executable 是 exe 自身所在目录；源码运行时是 python.exe 目录
-HERE = os.path.dirname(os.path.abspath(sys.executable))
 
 # 让 Windows cmd 中文不乱码：切到 UTF-8 代码页 + 重配 stdout/stderr
 try:
@@ -30,6 +27,30 @@ if os.name == "nt":
         os.system("chcp 65001 >nul 2>&1")
     except Exception:
         pass
+
+
+def bundle_root():
+    """配置文件（.env）应放哪。
+
+    优先找 run.bat 所在目录（= zip 解压根，用户一眼能看到的地方）；
+    其次找含 .env.example 的目录；最后退回 exe 自身目录。
+    """
+    exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+    parent = os.path.dirname(exe_dir)
+    cwd = os.getcwd()
+    # 1) run.bat 所在目录
+    for d in (exe_dir, parent, cwd):
+        if d and os.path.isfile(os.path.join(d, "run.bat")):
+            return d
+    # 2) 含 .env.example 的目录
+    for d in (cwd, exe_dir, parent):
+        if d and os.path.isfile(os.path.join(d, ".env.example")):
+            return d
+    # 3) 兜底
+    return exe_dir
+
+
+ROOT = bundle_root()
 
 
 def load_env(path):
@@ -63,15 +84,17 @@ def lan_ip():
 
 
 def main():
-    # 1) .env 初始化
-    env_path = os.path.join(HERE, ".env")
+    # 1) .env 初始化（放在 ROOT，与 run.bat 同级）
+    env_path = os.path.join(ROOT, ".env")
     if not os.path.exists(env_path):
-        example = os.path.join(HERE, ".env.example")
-        if os.path.exists(example):
-            shutil.copy(example, env_path)
-            print("[!] 已生成 .env（基于 .env.example）。若要用服务端裁判/攻击模型，")
-            print("    请编辑 .env 填入 JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY。")
-            print("    不填也能启动，但运行测试时服务端裁判会返回 503（可在 App 请求体自带 judge 规避）。")
+        for cand in (os.path.join(ROOT, ".env.example"),
+                     os.path.join(os.path.dirname(os.path.abspath(sys.executable)), ".env.example")):
+            if os.path.exists(cand):
+                shutil.copy(cand, env_path)
+                print("[!] 已生成 .env（基于 .env.example）。若要用服务端裁判/攻击模型，")
+                print("    请编辑 .env 填入 JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY。")
+                print("    不填也能启动，但运行测试时服务端裁判会返回 503（可在 App 请求体自带 judge 规避）。")
+                break
 
     cfg = load_env(env_path)
     port = int(cfg.get("PORT") or os.environ.get("PORT") or "8000")
@@ -79,7 +102,7 @@ def main():
     import uvicorn
     from app.main import app  # 静态导入，确保整个 app 包被打进 exe
 
-    print("\n=== AISecLab 后端启动中 (port=%d) ===" % port)
+    print("\n=== AISecLab 后端启动中 (port=%d, 配置目录=%s) ===" % (port, ROOT))
 
     # 2) 后台探测 /health（uvicorn.run 是阻塞的，这里用线程轮询并打印地址）
     def probe():
