@@ -42,7 +42,10 @@ async def run_session(
             # recursive=False 时只跑 1 轮。之前无条件调用 run_recursive（默认 10 轮），
             # 开关形同虚设——用户关了递归对抗，仍在多轮改写强攻，既烧 token 又制造假阳性。
             rounds = 10 if req.recursive else 1
-            samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "3")))
+            # 默认 1：与默认 TARGET_TEMPERATURE=0 自洽（温度 0 下多次采样结果一致，
+            # stability 恒 1.0，N>1 只是白烧 N 倍调用）。要做稳定性实验时再调大，
+            # 并同时把 TARGET_TEMPERATURE 设为 0.6~0.8。
+            samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "1")))
             # 提醒：temperature=0 时 N 次采样高度一致、stability 恒≈1.0，别让人白烧 N 倍调用
             if samples > 1 and float(os.environ.get("TARGET_TEMPERATURE", "0")) <= 0:
                 print(
@@ -51,11 +54,12 @@ async def run_session(
                     "要观察真实波动请把 TARGET_TEMPERATURE 调到 0.6~0.8。",
                     flush=True,
                 )
-            # ── 多次采样（稳定性，默认 N=3）──
+            # ── 多次采样（稳定性，默认 N=1，即单次定论）──
             # 每用例独立采 N 次被测回答；N>1 时逐样本裁判、按"多数裁决"定论，
             # stability = 多数派占比，低一致性（<80%）会在报告里标红。
             # 要观察到方差需被测模型 temperature>0（用 TARGET_TEMPERATURE 覆盖）；
-            # 默认 TARGET_TEMPERATURE=0 时采样结果基本一致，stability 恒为 1.0（可复现）。
+            # 默认 TARGET_TEMPERATURE=0 时采样结果基本一致，stability 恒为 1.0（可复现），
+            # 故默认 N=1——N>1 只有在同时调高温度时才有信息量。
             t0 = time.time()
             responses = []
             for _ in range(samples):
