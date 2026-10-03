@@ -69,11 +69,13 @@ async def run_session(
                 resp, trail = responses[0]
                 jr = await judge(judge_client, tc, resp)
                 stability = 1.0
+                measured = False
             else:
                 judged = [await judge(judge_client, tc, r) for r, _ in responses]
                 votes = [j.verdict for j in judged]
                 majority = max(set(votes), key=votes.count)
                 stability = votes.count(majority) / len(votes)
+                measured = True
                 idx = next(i for i, v in enumerate(votes) if v == majority)
                 resp, trail = responses[idx]
                 jr = judged[idx].model_copy(update={
@@ -84,7 +86,7 @@ async def run_session(
             results.append(TestResult(
                 testCase=tc, response=resp, judgeResult=jr,
                 latencyMs=int((time.time() - t0) * 1000), attackTrail=trail,
-                stability=stability,
+                stability=stability, stabilityMeasured=measured,
             ))
             if on_progress:
                 await on_progress(len(results), total, tc.dimension)

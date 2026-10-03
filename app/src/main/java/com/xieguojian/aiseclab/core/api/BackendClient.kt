@@ -218,7 +218,13 @@ class BackendClient {
     }
 
     private fun join(base: String, path: String): String {
-        val b = base.trim().trimEnd('/')
+        // 优化点①：用户常漏写 http://（如填 192.168.1.10:8000），OkHttp 会因 scheme==null 直接抛错。
+        // 这里自动补 scheme，省去用户手动带协议的负担，也消除"填了地址连不上"的头号根因。
+        var b = base.trim()
+        if (!b.startsWith("http://", ignoreCase = true) && !b.startsWith("https://", ignoreCase = true)) {
+            b = "http://$b"
+        }
+        b = b.trimEnd('/')
         return "$b$path"
     }
 }

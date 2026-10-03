@@ -75,6 +75,7 @@ class TestResult(BaseModel):
     latencyMs: int = 0
     attackTrail: List[str] = []
     stability: float = 1.0     # 多次采样一致性（默认 1.0，单样本恒为 1.0）
+    stabilityMeasured: bool = True  # False=单样本/温度0，stability 是占位值、不代表真实波动（优化点⑥）
 
 
 class DimensionScore(BaseModel):

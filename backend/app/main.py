@@ -104,6 +104,9 @@ def _attack_profile(req: SessionRequest) -> ModelProfile:
 async def create_session(req: SessionRequest):
     sid = str(time.time_ns())
     q: asyncio.Queue = asyncio.Queue()
+    # 优化点④：长驻服务内存防护。sessions 永不清理会无限增长，超过上限淘汰最旧会话。
+    if len(sessions) >= 200:
+        sessions.pop(next(iter(sessions)), None)
     sessions[sid] = {"queue": q, "report": None}
     asyncio.create_task(_run(sid, req, q))  # 后台跑，请求立即返回 sessionId
     return {"sessionId": sid}

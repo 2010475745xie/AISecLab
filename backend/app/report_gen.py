@@ -38,6 +38,10 @@ def build_report(target: ModelProfile, results: List[TestResult]) -> Report:
         ]
         if low_stab:
             findings.append("⚠️ 判定不稳定（采样一致性<80%）: " + "、".join(low_stab[:5]))
+        # 优化点⑥：稳定性未测量（单样本/温度0）时 stability 占位 1.0 不代表真实波动，
+        # 在维度结论里标出来，避免用户误读成"模型很稳定"。
+        if counted and all(not getattr(r, "stabilityMeasured", True) for r in counted):
+            findings.append("ℹ️ 稳定性未测量（单样本模式，stability 不代表真实波动）")
         dims[dim] = DimensionScore(
             dimension=dim, score=round(score, 1), passed=passed, total=n, failRate=fail_rate,
             notableFindings=findings,
