@@ -10,9 +10,11 @@ AISecLab 后端「免安装」启动器（被 PyInstaller 冻结成 exe 后使�
 """
 
 import os
+import re
 import sys
 import socket
 import shutil
+import subprocess
 import time
 import urllib.request
 
@@ -72,15 +74,87 @@ def load_env(path):
     return env
 
 
-def lan_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def _is_private(ip: str) -> bool:
+    """RFC1918 私网地址判定：10/8、172.16/12、192.168/16。"""
     try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        parts = [int(x) for x in ip.split(".")]
+    except (ValueError, AttributeError):
+        return False
+    if len(parts) != 4:
+        return False
+    a, b = parts[0], parts[1]
+    if a == 10:
+        return True
+    if a == 172 and 16 <= b <= 31:
+        return True
+    if a == 192 and b == 168:
+        return True
+    return False
+
+
+def lan_ips() -> list:
+    """枚举本机所有可用于手机直连的私网 IPv4（去重、私网优先）。
+
+    为什么不能只用「UDP connect 8.8.8.8 取源 IP」：那是**默认路由**出口，
+    一旦电脑开着 VPN / 代理 / 隧道，拿到的是隧道网卡地址（如 198.18.x.x），
+    手机根本不在那个网段里，照抄横幅就必然连不上（2026-10-07 真实踩坑）。
+    所以这里改为「先用默认路由，若不是私网则枚举网卡补上真正的 LAN 地址」。
+    """
+    ips = []
+
+    # 1) 默认路由出口（没开 VPN 时它就是正确 LAN IP）
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ips.append(s.getsockname()[0])
+        finally:
+            s.close()
     except Exception:
-        return "127.0.0.1"
-    finally:
-        s.close()
+        pass
+
+    # 2) 枚举所有网卡（Windows 用 PowerShell，速度够快且不依赖额外库）
+    if os.name == "nt":
+        try:
+            ps = (
+                "Get-NetIPAddress -AddressFamily IPv4 | "
+                "Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254*'} | "
+                "Select-Object -ExpandProperty IPAddress"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                capture_output=True, timeout=12,
+            ).stdout.decode("utf-8", errors="ignore")
+            for line in out.splitlines():
+                line = line.strip()
+                if line and line not in ips:
+                    ips.append(line)
+        except Exception:
+            pass
+    else:  # 兜底：POSIX 用 ifconfig / ip
+        for cmd in (["ifconfig", "-a"], ["ip", "-4", "addr"]):
+            try:
+                out = subprocess.run(cmd, capture_output=True, timeout=8).stdout.decode(
+                    "utf-8", errors="ignore")
+                for m in re.finditer(r"inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)", out):
+                    ip = m.group(1)
+                    if ip not in ips:
+                        ips.append(ip)
+                if ips:
+                    break
+            except Exception:
+                continue
+
+    # 3) 私网地址排前面（真正能给手机用），公网/VPN 隧道地址排后
+    priv = [ip for ip in ips if _is_private(ip)]
+    other = [ip for ip in ips if not _is_private(ip)]
+    return priv + other
+
+
+def lan_ip() -> str:
+    """给手机填的那个地址：优先第一个私网地址（VPN 开着也不会吐隧道 IP）。"""
+    ips = lan_ips()
+    return ips[0] if ips else "127.0.0.1"
 
 
 def main():
@@ -117,6 +191,16 @@ def main():
                 print("    本机 / 模拟器 :  http://localhost:%d" % port)
                 print("    手机同 Wi-Fi   :  http://%s:%d   <-- 一般用这个" % (ip, port))
                 print("    健康检查       :  %s/health" % ("http://127.0.0.1:%d" % port))
+                # 多个网卡 / VPN 场景下把候选都列出来，避免用户照抄到隧道地址
+                ips = lan_ips()
+                if len(ips) > 1:
+                    print("-" * 60)
+                    print("  其他网卡地址（填错地址是最常见的连不上原因）：")
+                    for extra in ips[1:]:
+                        tag = "私网" if _is_private(extra) else "非私网(可能是 VPN/虚拟网卡，手机多半连不上)"
+                        print("    http://%s:%d   [%s]" % (extra, port, tag))
+                    print("  提示：手机和电脑要在同一个 Wi-Fi/局域网；")
+                    print("        若电脑开着 VPN，优先用上面的私网地址，并确认 VPN 没有阻断局域网入站。")
                 print("=" * 60)
                 print("  按 Ctrl+C 停止服务。\n")
                 return
