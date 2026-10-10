@@ -28,7 +28,7 @@ internal fun modelLabel(p: ModelProfile): String =
  */
 object ReportGenerator {
 
-    fun toMarkdown(report: Report): String = buildString {
+    fun toMarkdown(report: Report, diff: ReportDiff.Result? = null): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
         append("# AISecLab 测评报告\n\n")
         append("**模型**：${modelLabel(report.modelProfile)}  \n")
@@ -46,6 +46,56 @@ object ReportGenerator {
             append("| ${d.dimension.label} | $score | $ratio | $rate |\n")
         }
         append("\n## 摘要\n\n${report.summary}\n\n")
+
+        // ── 基线对比章节（选了基线才有）──
+        if (diff != null) {
+            append("## 基线对比\n\n")
+            append("基线时间：${formatTime(diff.base.timestamp)}  \n")
+            val deltaTxt = when {
+                diff.scoreDelta == null -> "无法比较（有一侧无有效样本）"
+                diff.scoreDelta > 0f -> "↑ %.1f".format(diff.scoreDelta)
+                diff.scoreDelta < 0f -> "↓ %.1f".format(-diff.scoreDelta)
+                else -> "持平"
+            }
+            append("总分：%.1f → %.1f（%s）\n\n".format(diff.baseTotal, diff.curTotal, deltaTxt))
+            append("| 维度 | 基线 | 本轮 | 变化 |\n|---|---|---|---|\n")
+            diff.dimChanges.forEach { dc ->
+                val bd = dc.delta
+                val bdText = when {
+                    bd == null -> "--"
+                    bd > 0f -> "+%.1f".format(bd)
+                    bd < 0f -> "%.1f".format(bd)
+                    else -> "0.0"
+                }
+                append("| ${dc.dimension.label} | ${dc.baseScore?.let{"%.1f".format(it)} ?: "--"} | " +
+                        "${dc.curScore?.let{"%.1f".format(it)} ?: "--"} | $bdText |\n")
+            }
+            append("\n")
+            if (diff.regressions.isNotEmpty()) {
+                append("### 新增失守 ${diff.regressions.size} 条\n\n")
+                diff.regressions.forEach { c ->
+                    append("- [${c.result.testCase.dimension.label}] ${c.result.testCase.title}")
+                    append("（基线 ${ReportDiff.verdictText(c.from)} → 本轮 失守）\n")
+                }
+                append("\n")
+            }
+            if (diff.fixed.isNotEmpty()) {
+                append("### 已修复 ${diff.fixed.size} 条\n\n")
+                diff.fixed.forEach { c ->
+                    append("- [${c.result.testCase.dimension.label}] ${c.result.testCase.title}")
+                    append("（基线 失守 → 本轮 通过）\n")
+                }
+                append("\n")
+            }
+            if (diff.uncomparable.isNotEmpty()) {
+                append("### 无法比较 ${diff.uncomparable.size} 条（含不可评估/待复核，不计入方向）\n\n")
+                diff.uncomparable.forEach { c ->
+                    append("- [${c.result.testCase.dimension.label}] ${c.result.testCase.title}")
+                    append("（基线 ${ReportDiff.verdictText(c.from)} → 本轮 ${ReportDiff.verdictText(c.to)}）\n")
+                }
+                append("\n")
+            }
+        }
 
         append("## 失守明细\n\n")
         val fails = report.results.filter { it.judgeResult.verdict == Verdict.FAIL }
@@ -78,7 +128,7 @@ object ReportGenerator {
         }
     }
 
-    fun toHtml(report: Report): String = buildString {
+    fun toHtml(report: Report, diff: ReportDiff.Result? = null): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
         val riskColor = when (report.riskLevel) {
             RiskLevel.LOW -> "#1D9E75"
@@ -122,6 +172,62 @@ object ReportGenerator {
         append("</div>")
 
         append("<h2>摘要</h2><p>${report.summary}</p>")
+
+        // ── 基线对比章节（选了基线才有）──
+        if (diff != null) {
+            append("<h2>基线对比</h2>")
+            append("<div class=\"meta\">基线时间：${formatTime(diff.base.timestamp)}</div>")
+            val deltaTxt = when {
+                diff.scoreDelta == null -> "无法比较（有一侧无有效样本）"
+                diff.scoreDelta > 0f -> "↑ %.1f".format(diff.scoreDelta)
+                diff.scoreDelta < 0f -> "↓ %.1f".format(-diff.scoreDelta)
+                else -> "持平"
+            }
+            append("<p>总分：%.1f → %.1f（%s）</p>".format(diff.baseTotal, diff.curTotal, deltaTxt))
+            append("<table style=\"width:100%%;border-collapse:collapse;margin:8px 0\">")
+            append("<tr style=\"background:#f5f5f5\"><th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">维度</th>")
+            append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">基线</th>")
+            append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">本轮</th>")
+            append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">变化</th></tr>")
+            diff.dimChanges.forEach { dc ->
+                val bd = dc.delta
+                val bdText = when {
+                    bd == null -> "--"
+                    bd > 0f -> "+%.1f".format(bd)
+                    bd < 0f -> "%.1f".format(bd)
+                    else -> "0.0"
+                }
+                append("<tr><td style=\"padding:6px;border:1px solid #e5e5e5\">${dc.dimension.label}</td>")
+                append("<td style=\"padding:6px;border:1px solid #e5e5e5\">${dc.baseScore?.let{"%.1f".format(it)} ?: "--"}</td>")
+                append("<td style=\"padding:6px;border:1px solid #e5e5e5\">${dc.curScore?.let{"%.1f".format(it)} ?: "--"}</td>")
+                append("<td style=\"padding:6px;border:1px solid #e5e5e5\">$bdText</td></tr>")
+            }
+            append("</table>")
+            if (diff.regressions.isNotEmpty()) {
+                append("<h3 style=\"color:#E24B4B\">新增失守 ${diff.regressions.size} 条</h3><ul>")
+                diff.regressions.forEach { c ->
+                    append("<li>[${c.result.testCase.dimension.label}] ${escapeHtml(c.result.testCase.title)}" +
+                            "（基线 ${ReportDiff.verdictText(c.from)} → 本轮 失守）</li>")
+                }
+                append("</ul>")
+            }
+            if (diff.fixed.isNotEmpty()) {
+                append("<h3 style=\"color:#1D9E75\">已修复 ${diff.fixed.size} 条</h3><ul>")
+                diff.fixed.forEach { c ->
+                    append("<li>[${c.result.testCase.dimension.label}] ${escapeHtml(c.result.testCase.title)}" +
+                            "（基线 失守 → 本轮 通过）</li>")
+                }
+                append("</ul>")
+            }
+            if (diff.uncomparable.isNotEmpty()) {
+                append("<h3 style=\"color:#8A8A8A\">无法比较 ${diff.uncomparable.size} 条（含不可评估/待复核）</h3><ul>")
+                diff.uncomparable.forEach { c ->
+                    append("<li>[${c.result.testCase.dimension.label}] ${escapeHtml(c.result.testCase.title)}" +
+                            "（基线 ${ReportDiff.verdictText(c.from)} → 本轮 ${ReportDiff.verdictText(c.to)}）</li>")
+                }
+                append("</ul>")
+            }
+        }
 
         append("<h2>失守明细</h2>")
         val fails = report.results.filter { it.judgeResult.verdict == Verdict.FAIL }

@@ -15,6 +15,7 @@ import com.xieguojian.aiseclab.core.model.RoleSource
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.repo.HistoryRepository
 import com.xieguojian.aiseclab.core.repo.ProfileRepository
+import com.xieguojian.aiseclab.core.report.ReportDiff
 import com.xieguojian.aiseclab.core.report.ReportGenerator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -115,6 +116,10 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     private val _history = MutableStateFlow<List<Report>>(emptyList())
     val history: StateFlow<List<Report>> = _history.asStateFlow()
 
+    /** 基线对比：选定的历史报告；null = 不做对比。 */
+    private val _baseline = MutableStateFlow<Report?>(null)
+    val baseline: StateFlow<Report?> = _baseline.asStateFlow()
+
     /**
      * 重读历史列表。冷启动（init）、进历史页、或收到 Done（新报告落盘后）时调用。
      *
@@ -125,10 +130,15 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) { _history.value = historyRepo.list() }
     }
 
+    /**
+     * 删掉历史时如果删的正是基线，清空基线 —— 否则下次进报告页会拿到一份
+     * 已经被删掉的报告做 diff，显示一个用户以为还在的「基线」。
+     */
     fun deleteHistory(timestamp: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             historyRepo.delete(timestamp)
             _history.value = historyRepo.list()
+            if (_baseline.value?.timestamp == timestamp) _baseline.value = null
         }
     }
 
@@ -136,7 +146,19 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             historyRepo.clear()
             _history.value = emptyList()
+            // 基线可能正指向一份被删掉的报告，清掉避免下次 diff 拿到陈旧数据
+            _baseline.value = null
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 基线对比：选定一份历史报告作基线，报告页据此展示 delta
+    // ------------------------------------------------------------------
+
+    /** 选/取消基线。点同一个 = 取消。 */
+    fun toggleBaseline(report: Report) {
+        val cur = _baseline.value
+        _baseline.value = if (cur?.timestamp == report.timestamp) null else report
     }
 
     fun saveTarget(name: String, baseUrl: String, apiKey: String, model: String) {
@@ -274,10 +296,12 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 导出 HTML。传 [report] 则导出指定报告（历史记录回看），缺省导出本轮当前报告。
+     * 已选基线时会把对比章节一起写进导出。
      */
     fun exportHtml(report: Report? = null): File? {
         val r = report ?: (_testState.value as? TestState.Done)?.report ?: return null
-        val html = ReportGenerator.toHtml(r)
+        val d = diffOf(r)
+        val html = ReportGenerator.toHtml(r, d)
         // 写到应用外部 files/Download —— 用户能在「文件管理」里直接找到，无需 root。
         // getExternalFilesDir 不需要任何存储权限（App 专属外部目录），downloadDir 为 null 时回退 cacheDir。
         val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -290,12 +314,23 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     /** 导出 Markdown。传 [report] 则导出指定报告（历史记录回看），缺省导出本轮当前报告。 */
     fun exportMarkdown(report: Report? = null): File? {
         val r = report ?: (_testState.value as? TestState.Done)?.report ?: return null
-        val md = ReportGenerator.toMarkdown(r)
+        val d = diffOf(r)
+        val md = ReportGenerator.toMarkdown(r, d)
         val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
             ?: getApplication<Application>().cacheDir
         val file = File(dir, "aiseclab_report_${r.timestamp}.md")
         file.writeText(md)
         return file
+    }
+
+    /**
+     * 基线对比：只在"基线比这份报告早"时才比。
+     * 拿一份更新的报告当基线去比旧报告语义不对（那是"倒退"），UI 已经过滤，这里兜底。
+     */
+    private fun diffOf(report: Report): ReportDiff.Result? {
+        val b = _baseline.value ?: return null
+        if (b.timestamp >= report.timestamp) return null
+        return ReportDiff.compare(b, report)
     }
 
     fun reset() {

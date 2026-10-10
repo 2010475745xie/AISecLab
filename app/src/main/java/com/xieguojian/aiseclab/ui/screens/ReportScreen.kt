@@ -32,6 +32,7 @@ import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
+import com.xieguojian.aiseclab.core.report.ReportDiff
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.TestViewModel
 import java.io.File
@@ -52,10 +53,14 @@ fun ReportScreen(
 ) {
     val state by vm.testState.collectAsState()
     val report = reportOverride ?: (state as? TestViewModel.TestState.Done)?.report
+    val history by vm.history.collectAsState()
+    val baseline by vm.baseline.collectAsState()
     val ctx = LocalContext.current
 
     // 最近一次导出的文件，用于展示"已保存"提示 + 分享按钮
     var exportedFile by remember { mutableStateOf<File?>(null) }
+    // 是否展开"选基线"面板
+    var showBaselinePicker by remember { mutableStateOf(false) }
 
     if (report == null) {
         Column(Modifier.fillMaxSize().padding(20.dp)) {
@@ -63,6 +68,14 @@ fun ReportScreen(
             TextButton(onClick = onBack) { Text("返回测试") }
         }
         return
+    }
+
+    // 基线对比：排除"自己跟自己比"，只留比当前报告早的历史
+    val candidates = remember(history, report.timestamp) {
+        history.filter { it.timestamp != report.timestamp && it.timestamp < report.timestamp }
+    }
+    val diff = remember(baseline, report) {
+        baseline?.let { ReportDiff.compare(it, report) }
     }
 
     val riskColor = when (report.riskLevel) {
@@ -144,6 +157,85 @@ fun ReportScreen(
             }
             Spacer(Modifier.height(24.dp))
             Text("分维度得分", style = MaterialTheme.typography.titleMedium)
+        }
+
+        // ── 基线对比 ──
+        item {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text("基线对比", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.weight(1f))
+                if (baseline != null) {
+                    TextButton(onClick = { vm.toggleBaseline(baseline!!) }) { Text("清除基线") }
+                }
+                TextButton(onClick = { showBaselinePicker = !showBaselinePicker }) {
+                    Text(if (showBaselinePicker) "收起" else "选择基线")
+                }
+            }
+        }
+
+        if (showBaselinePicker) {
+            item {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp)) {
+                        if (candidates.isEmpty()) {
+                            Text(
+                                "没有更早的历史报告可作基线。跑完第二轮后就能对比了。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text("选一份更早的报告作基线：", style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(6.dp))
+                            candidates.take(20).forEach { cand ->
+                                val selected = baseline?.timestamp == cand.timestamp
+                                TextButton(onClick = {
+                                    vm.toggleBaseline(cand)
+                                    showBaselinePicker = false
+                                }) {
+                                    Text(
+                                        (if (selected) "● " else "○ ") +
+                                            "${timeFmtOnly(cand.timestamp)} · " +
+                                            "%.1f".format(cand.overallScore) + " 分",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 对比结果
+        if (diff != null) {
+            item {
+                DiffSummaryCard(diff)
+            }
+            if (diff.regressions.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Text("新增失守（基线通过 → 本轮失守）", style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFFE24B4A))
+                }
+                items(diff.regressions) { c -> ChangeItem(c, ReportDiff.verdictText(c.from), "失守") }
+            }
+            if (diff.fixed.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Text("已修复（基线失守 → 本轮通过）", style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFF1D9E75))
+                }
+                items(diff.fixed) { c -> ChangeItem(c, ReportDiff.verdictText(c.from), "通过") }
+            }
+            if (diff.uncomparable.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(8.dp))
+                    Text("无法比较（含不可评估/待复核）", style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFF8A8A8A))
+                }
+                items(diff.uncomparable) { c -> ChangeItem(c, ReportDiff.verdictText(c.from), ReportDiff.verdictText(c.to)) }
+            }
         }
 
         items(report.dimensions.values.sortedBy { it.dimension.ordinal }.toList()) { d ->
@@ -248,6 +340,85 @@ private fun SkippedItem(r: TestResult) {
         }
     }
 }
+
+/** 基线对比：总分/维度 delta 一览。 */
+@Composable
+private fun DiffSummaryCard(diff: ReportDiff.Result) {
+    val baseTime = timeFmtOnly(diff.base.timestamp)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text("对比基线（$baseTime）", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = androidx.compose.ui.Alignment.Bottom) {
+                Text(
+                    if (diff.base.riskLevel == RiskLevel.UNKNOWN) "--" else "%.1f".format(diff.baseTotal),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color(0xFF8A8A8A)
+                )
+                Text(" → ", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 3.dp))
+                Text(
+                    if (diff.cur.riskLevel == RiskLevel.UNKNOWN) "--" else "%.1f".format(diff.curTotal),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = if (diff.cur.riskLevel == RiskLevel.UNKNOWN) Color(0xFF8A8A8A) else Color(0xFF1D9E75)
+                )
+                Spacer(Modifier.weight(1f))
+                // scoreDelta 为 null = 有--侧无有效样本，不能比
+                val d = diff.scoreDelta
+                Text(
+                    when {
+                        d == null -> "无法比较"
+                        d > 0f -> "↑ %.1f".format(d)
+                        d < 0f -> "↓ %.1f".format(-d)
+                        else -> "持平"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = when {
+                        d == null -> Color(0xFF8A8A8A)
+                        d > 0f -> Color(0xFF1D9E75)
+                        d < 0f -> Color(0xFFE24B4A)
+                        else -> Color(0xFF8A8A8A)
+                    }
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            diff.dimChanges.forEach { dc ->
+                val bd = dc.delta
+                Text(
+                    "${dc.dimension.label}：" +
+                        (bd?.let { "%+.1f".format(it) } ?: "—"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when {
+                        bd == null -> Color(0xFF8A8A8A)
+                        bd > 0f -> Color(0xFF1D9E75)
+                        bd < 0f -> Color(0xFFE24B4A)
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** 单条变化项：维度·标题 + from→to。 */
+@Composable
+private fun ChangeItem(c: ReportDiff.CaseChange, fromText: String, toText: String) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                "${c.result.testCase.dimension.label} · ${c.result.testCase.title}",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                "基线：$fromText → 本轮：$toText",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun timeFmtOnly(ts: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ts))
 
 private fun riskText(level: RiskLevel): String = when (level) {
     RiskLevel.LOW -> "低风险"
