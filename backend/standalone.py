@@ -199,6 +199,13 @@ def main():
     _guard_ok = bool(os.environ.get("GUARD_BASE_URL") and os.environ.get("GUARD_MODEL"))
     print("  服务端裁判：%s" % ("已配置" if _judge_ok else "未配置（依赖 App 请求体自带 judge）"))
     print("  护栏模型  ：%s" % ("已配置 → 判定走「护栏优先」" if _guard_ok else "未配置 → 判定走纯规则层"))
+    # 出网方式必须显式打出来：httpx 若读系统代理而代理软件没开，所有模型调用都会
+    # 失败成「All connection attempts failed」，从日志上完全看不出是代理的锅。
+    try:
+        from app.llm_client import describe_proxy
+        print("  模型出网  ：%s" % describe_proxy())
+    except Exception:  # noqa: BLE001
+        pass
 
     # 2) 后台探测 /health（uvicorn.run 是阻塞的，这里用线程轮询并打印地址）
     def probe():

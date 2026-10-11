@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 from typing import Optional
@@ -32,6 +33,8 @@ from .models import Dimension, ModelProfile, Report, SessionRequest, TestCase
 
 
 app = FastAPI(title="AISecLab Backend", version="0.1.0")
+
+logger = logging.getLogger(__name__)
 
 # ── 可选 token 鉴权（比赛/公网共享服务器建议设置 API_TOKEN）──────────────
 # 用原始 ASGI 中间件：只校验请求头，不包裹响应体，SSE 长连接不会被缓冲。
@@ -176,6 +179,9 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         sessions[sid]["report"] = report
         await q.put(json.dumps({"event": "done", "reportId": sid}))
     except Exception as e:  # noqa: BLE001
+        # 以前这里只往 SSE 塞一句 message，服务端**不留任何日志** ——
+        # 端上只看到「连接失败」时，服务端也查不到是哪个上游、什么栈。见 2026-10-11 排查。
+        logger.exception("session %s 运行失败：%s: %s", sid, type(e).__name__, e)
         await q.put(json.dumps({"event": "error", "message": str(e)}))
     finally:
         await judge_client.close()

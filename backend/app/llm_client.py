@@ -8,13 +8,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 
 from .models import ModelProfile
+
+logger = logging.getLogger(__name__)
 
 # 值得重试的状态码：限流 / 网关抖动 / 上游 5xx。
 _RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -29,6 +33,35 @@ def _sem() -> asyncio.Semaphore:
     if _GLOBAL_SEM is None:
         _GLOBAL_SEM = asyncio.Semaphore(max(1, int(os.environ.get("MAX_CONCURRENCY", "3"))))
     return _GLOBAL_SEM
+
+
+# ── 出网代理：**不信任系统代理** ───────────────────────────────────────
+# 踩过的坑（2026-10-11）：httpx 默认 `trust_env=True`，在 Windows 上会去读**注册表**里的
+# 系统代理（用户机器上 ProxyEnable=1 / ProxyServer=127.0.0.1:3067）。用户的代理软件没开时，
+# 所有模型调用都退化成「连接被拒绝 → ConnectError: All connection attempts failed」，
+# 而 deepseek 这类端点直连明明是通的 —— 报错还完全指不出是代理的锅。
+# 现在：**默认直连**；只有显式设了代理环境变量才走代理。
+_PROXY_ENV_KEYS = (
+    "AISECLAB_PROXY",
+    "HTTPS_PROXY", "https_proxy",
+    "HTTP_PROXY", "http_proxy",
+    "ALL_PROXY", "all_proxy",
+)
+
+
+def resolve_proxy() -> Optional[str]:
+    """显式配置的出网代理；未配置返回 None（= 直连，不读系统代理）。"""
+    for k in _PROXY_ENV_KEYS:
+        v = (os.environ.get(k) or "").strip()
+        if v:
+            return v
+    return None
+
+
+def describe_proxy() -> str:
+    """启动横幅里展示用。"""
+    p = resolve_proxy()
+    return ("代理 %s" % p) if p else "直连（未使用代理）"
 
 
 def _env_num(key: str, default: float) -> float:
@@ -53,7 +86,10 @@ class ChatClient:
         if max_retries is None:
             max_retries = int(max(0.0, _env_num("MAX_RETRIES", 5.0)))
         self.max_retries = int(max_retries)
-        self._client = httpx.AsyncClient(timeout=timeout)
+        # trust_env=False：**不读系统代理/注册表**，只认显式配置的代理（见 resolve_proxy）。
+        self._client = httpx.AsyncClient(
+            timeout=timeout, trust_env=False, proxy=resolve_proxy()
+        )
         # 本 client 的累计用量：**成功响应才计**。engine 汇总三个 client（被测/裁判/攻击）后
         # 随进度事件发给端上 —— 支撑"跑的时候实时显示消耗了多少 token"。
         self.usage = {"prompt": 0, "completion": 0, "total": 0, "calls": 0}
@@ -75,6 +111,19 @@ class ChatClient:
         self.usage["completion"] += c
         self.usage["total"] += t
         self.usage["calls"] += 1
+
+    def _endpoint_label(self) -> str:
+        """错误信息里用的端点标识：`host (模型名)`，**不含 apiKey**。
+
+        以前上游连不上时只抛 `All connection attempts failed`，既看不出是哪个端点、
+        也看不出是哪个角色（被测/裁判/攻击），排查只能靠猜。这里把它补上。
+        """
+        base = self.profile.baseUrl or ""
+        try:
+            host = urlsplit(base).netloc or base
+        except Exception:  # noqa: BLE001
+            host = base
+        return "%s (%s)" % (host or "?", self.profile.model or "?")
 
     async def chat(self, messages: list, temperature: float = 0.7) -> str:
         url = self.profile.baseUrl.rstrip("/") + "/chat/completions"
@@ -98,8 +147,16 @@ class ChatClient:
                 return data["choices"][0]["message"]["content"]
             except httpx.TransportError as e:  # 连接失败 / 读写超时 / 网络抖动
                 last_exc = e
+                logger.warning(
+                    "上游不可达（%s）第 %d/%d 次：%s: %s",
+                    self._endpoint_label(), attempt + 1, self.max_retries + 1, type(e).__name__, e,
+                )
                 if attempt >= self.max_retries:
-                    raise
+                    # 把端点写进异常：端上/报告里能直接看出是哪个上游挂了
+                    raise RuntimeError(
+                        "连接上游失败：%s，已重试 %d 次仍不可达（%s: %s）"
+                        % (self._endpoint_label(), self.max_retries, type(e).__name__, e)
+                    ) from e
                 await asyncio.sleep(min(2 ** attempt, 20))
         if last_exc is not None:
             raise last_exc
@@ -141,9 +198,15 @@ class ChatClient:
             "logprobs": top_logprobs > 0,
             "top_logprobs": max(0, top_logprobs),
         }
-        async with _sem():
-            resp = await self._client.post(url, headers=headers, json=payload)
-        resp.raise_for_status()
+        try:
+            async with _sem():
+                resp = await self._client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+        except httpx.TransportError as e:
+            logger.warning("上游不可达（%s）：%s: %s", self._endpoint_label(), type(e).__name__, e)
+            raise RuntimeError(
+                "连接上游失败：%s（%s: %s）" % (self._endpoint_label(), type(e).__name__, e)
+            ) from e
         data = resp.json()
         self._record_usage(data)
         choice = (data.get("choices") or [{}])[0]
