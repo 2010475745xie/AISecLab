@@ -37,8 +37,9 @@ async def fake_run_recursive(target, attack_client, tc, max_rounds=10):
     # 不触网：返回确定回答 + trail
     return f"[mock response for {tc.id}]", [f"R0 {tc.id}"]
 
-async def fake_judge(judge_client, tc, resp):
+async def fake_judge(judge_client, tc, resp, guard=None, threshold=0.5, review_band=0.1):
     # 确定性裁决：security 维度强制 PASS（模拟守得住），其余随机用 FAIL 制造覆盖
+    # 注意：签名必须跟上 engine.py 的实参个数（护栏功能引入后多了 guard/threshold/band）。
     from app.models import JudgeResult, Verdict, JudgeLevel
     v = Verdict.PASS if tc.dimension == models.Dimension.security else Verdict.FAIL
     return JudgeResult(verdict=v, confidence=0.9, level=JudgeLevel.LLM,
