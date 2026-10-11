@@ -18,7 +18,12 @@ import kotlin.math.exp
 class OpenAiCompatibleClient(
     private val baseUrl: String,
     private val apiKey: String,
-    private val model: String
+    private val model: String,
+    /**
+     * 这个 client 在测试里扮演的角色，仅用于 token 记账（[TokenMeter]）。
+     * 默认 TARGET：被测模型是绝大多数调用的主体，且这是最容易漏标的那个。
+     */
+    private val role: TokenMeter.Role = TokenMeter.Role.TARGET
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -33,10 +38,13 @@ class OpenAiCompatibleClient(
      * [firstTopTokens] 是**首个生成位置**的 top-k 概率（token 文本 → 概率）。
      * 护栏模型（YuFeng-XGuard 之类）采用「首 token 即结论」范式，所以这个位置就是结论本身，
      * 有了它才能把判定从"是/否"升级为**标定过的危险度**。
+     *
+     * [usage] 为该次调用的用量（端点不回时为 null），由 [chatDetailed] 交给 [TokenMeter] 记账。
      */
     data class Completion(
         val content: String,
-        val firstTopTokens: List<Pair<String, Double>> = emptyList()
+        val firstTopTokens: List<Pair<String, Double>> = emptyList(),
+        val usage: Usage? = null
     )
 
     suspend fun chat(messages: List<ChatMessage>, temperature: Double = 0.7): String =
@@ -73,7 +81,11 @@ class OpenAiCompatibleClient(
             if (!resp.isSuccessful) {
                 throw ApiException("HTTP ${resp.code}: ${text.take(500)}", resp.code)
             }
-            parseCompletion(text)
+            val completion = parseCompletion(text)
+            // 记账：只记成功响应。失败/重试的请求拿不到 usage，宁可不计也不估算。
+            // 所有测试链路（被测/裁判/攻击/护栏）都经过这里，所以记账放在这一层而不是调用方。
+            TokenMeter.record(role, completion.usage)
+            completion
         }
     }
 
@@ -101,7 +113,8 @@ class OpenAiCompatibleClient(
             val choice = parsed.choices.firstOrNull()
             return Completion(
                 content = choice?.message?.content?.trim() ?: "",
-                firstTopTokens = firstTopTokens(choice)
+                firstTopTokens = firstTopTokens(choice),
+                usage = parsed.usage
             )
         }
 

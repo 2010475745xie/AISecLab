@@ -14,6 +14,7 @@ import android.os.PowerManager.PARTIAL_WAKE_LOCK
 import androidx.core.app.NotificationCompat
 import com.xieguojian.aiseclab.core.TestSession
 import com.xieguojian.aiseclab.core.api.BackendClient
+import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.core.model.AuxModelProfile
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ModelProfile
@@ -106,6 +107,8 @@ class TestRunService : Service() {
             )
             val client = BackendClient()
             scope.launch {
+                // 后端委托分支不走 TestSession.run()，token 计数得在这里自己清零
+                TokenMeter.reset()
                 TestRunStateHolder.update(TestViewModel.TestState.Running(0, 0))
                 TestRunStateHolder.appendLog("🖥 委托后端运行：$backendUrl")
                 TestRunStateHolder.appendLog("▶ 维度：${dims.joinToString("/") { it.label }} · 递归对抗=$recursive")

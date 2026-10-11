@@ -25,7 +25,23 @@ data class ChatRequest(
 
 @Serializable
 data class ChatResponse(
-    val choices: List<Choice> = emptyList()
+    val choices: List<Choice> = emptyList(),
+    /**
+     * 用量统计。**不是所有端点都返回**：本地 llama.cpp server 需开 --metrics、
+     * 部分网关直接省略该字段 —— 缺省即 null，调用方必须容忍。
+     */
+    val usage: Usage? = null
+)
+
+/**
+ * OpenAI 兼容的 usage 字段（三家写法一致：prompt_tokens / completion_tokens / total_tokens）。
+ * 用于跑测试时实时显示 token 消耗。
+ */
+@Serializable
+data class Usage(
+    val prompt_tokens: Int = 0,
+    val completion_tokens: Int = 0,
+    val total_tokens: Int = 0
 )
 
 @Serializable

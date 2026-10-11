@@ -13,17 +13,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,6 +35,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.ui.TestViewModel
 
 /**
@@ -47,7 +52,11 @@ fun RunScreen(
 ) {
     val state by vm.testState.collectAsState()
     val log by vm.testLog.collectAsState()
+    val tokens by TokenMeter.state.collectAsState()
     val listState = rememberLazyListState()
+    // 「停止」= 丢弃本轮已跑完的所有结果（TestRunStateHolder.reset() 不保留任何一条）。
+    // 花了真金白银跑出来的东西不该一点就没，所以先让用户确认。
+    var confirmStop by remember { mutableStateOf(false) }
 
     // 新日志进来时自动滚到最底（用 snapshot，避免 items 还没重组完滚不到）
     LaunchedEffect(log.size) {
@@ -96,6 +105,17 @@ fun RunScreen(
                 else -> {
                     LinearProgressIndicator(progress = { 0f }, modifier = Modifier.fillMaxWidth())
                 }
+            }
+
+            // ── token 消耗：本轮累计，随每次模型调用实时增长 ──
+            // 放在状态分支之外，Running / Done / Error 都能看到（出错时用户更想知道烧了多少）。
+            tokens.summary()?.let { line ->
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -151,12 +171,37 @@ fun RunScreen(
                 ) { Text("返回") }
             } else {
                 OutlinedButton(
-                    onClick = onStop,
+                    onClick = { confirmStop = true },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = state is TestViewModel.TestState.Running
                 ) { Text("停止") }
             }
         }
+    }
+
+    // 停止确认：说清楚"已完成多少条会被丢弃"和"已经烧了多少 token"，
+    // 这两个数字才是用户真正在权衡的东西。
+    if (confirmStop) {
+        val running = state as? TestViewModel.TestState.Running
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text("停止本轮测试？") },
+            text = {
+                val done = running?.let { "已完成 ${it.completed} / ${it.total} 条，这些结果会一并丢弃。" }
+                    ?: "本轮结果会被丢弃。"
+                val spent = tokens.summary()?.let { "\n\n已消耗 $it。" }.orEmpty()
+                Text(done + spent + "\n\n不会生成报告，也无法恢复。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStop = false
+                    onStop()
+                }) { Text("停止并丢弃", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmStop = false }) { Text("继续测试") }
+            }
+        )
     }
 }
 

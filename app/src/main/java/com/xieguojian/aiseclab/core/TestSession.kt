@@ -3,6 +3,7 @@ package com.xieguojian.aiseclab.core
 import android.app.Application
 import com.xieguojian.aiseclab.core.api.ChatMessage
 import com.xieguojian.aiseclab.core.api.OpenAiCompatibleClient
+import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.core.engine.AttackModule
 import com.xieguojian.aiseclab.core.engine.modules.ConsistencyModule
 import com.xieguojian.aiseclab.core.engine.modules.FactualityModule
@@ -76,7 +77,7 @@ class TestSession(
 
             GuardMode.USER_LLM -> {
                 val ep = resolveEndpoint()
-                val c = OpenAiCompatibleClient(ep.baseUrl, ep.apiKey, ep.model)
+                val c = OpenAiCompatibleClient(ep.baseUrl, ep.apiKey, ep.model, TokenMeter.Role.GUARD)
                 LlmSafetyGuard(
                     chat = { msgs -> c.chat(msgs, temperature = 0.0) },
                     modelLabel = ep.model
@@ -94,11 +95,15 @@ class TestSession(
         onProgress: suspend (completed: Int, total: Int) -> Unit,
         onLog: ((String) -> Unit)? = null
     ): Report {
-        val targetClient = OpenAiCompatibleClient(target.baseUrl, target.apiKey, target.model)
+        // 新一轮开跑：清掉上一轮的 token 计数（端上服务与后端委托两条入口都经过这里）
+        TokenMeter.reset()
+        val targetClient = OpenAiCompatibleClient(
+            target.baseUrl, target.apiKey, target.model, TokenMeter.Role.TARGET
+        )
 
         val judgeEp = resolveEndpoint()
         val llmJudge = judgeEp.let { ep ->
-            val c = OpenAiCompatibleClient(ep.baseUrl, ep.apiKey, ep.model)
+            val c = OpenAiCompatibleClient(ep.baseUrl, ep.apiKey, ep.model, TokenMeter.Role.JUDGE)
             LlmJudge(chat = { msgs -> c.chat(msgs, temperature = 0.0) })
         }
         val ruleJudge = RuleJudge(llmJudge = llmJudge)
@@ -117,7 +122,7 @@ class TestSession(
 
         val attackerEp = resolveEndpoint()
         val attackerChat: (suspend (List<ChatMessage>) -> String)? = attackerEp.let { ep ->
-            val c = OpenAiCompatibleClient(ep.baseUrl, ep.apiKey, ep.model)
+            val c = OpenAiCompatibleClient(ep.baseUrl, ep.apiKey, ep.model, TokenMeter.Role.ATTACKER)
             val fn: suspend (List<ChatMessage>) -> String = { msgs -> c.chat(msgs, temperature = 1.0) }
             fn
         }

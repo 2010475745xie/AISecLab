@@ -156,7 +156,7 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
     attack_client = ChatClient(_attack_profile(req))
     guard, g_threshold, g_review_band = _build_guard(req)
 
-    async def on_progress(done, total, dim):
+    async def on_progress(done, total, dim, tokens=None):
         await q.put(
             json.dumps(
                 {
@@ -164,6 +164,8 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
                     "completed": done,
                     "total": total,
                     "dimension": dim.value,
+                    # 累计 token 用量（被测 + 裁判 + 攻击），端上据此实时显示消耗
+                    "tokens": tokens or {},
                 }
             )
         )

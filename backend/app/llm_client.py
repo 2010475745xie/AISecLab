@@ -54,6 +54,27 @@ class ChatClient:
             max_retries = int(max(0.0, _env_num("MAX_RETRIES", 5.0)))
         self.max_retries = int(max_retries)
         self._client = httpx.AsyncClient(timeout=timeout)
+        # 本 client 的累计用量：**成功响应才计**。engine 汇总三个 client（被测/裁判/攻击）后
+        # 随进度事件发给端上 —— 支撑"跑的时候实时显示消耗了多少 token"。
+        self.usage = {"prompt": 0, "completion": 0, "total": 0, "calls": 0}
+
+    def _record_usage(self, data: dict) -> None:
+        """从响应体取 usage 并累加。端点不回 usage（本地 llama.cpp 默认不回）时静默跳过 —— 宁可不计也不估算。"""
+        u = data.get("usage") or {}
+        try:
+            p = int(u.get("prompt_tokens") or 0)
+            c = int(u.get("completion_tokens") or 0)
+            t = int(u.get("total_tokens") or 0)
+        except (TypeError, ValueError):
+            return
+        if t <= 0:
+            t = p + c
+        if p <= 0 and c <= 0 and t <= 0:
+            return
+        self.usage["prompt"] += p
+        self.usage["completion"] += c
+        self.usage["total"] += t
+        self.usage["calls"] += 1
 
     async def chat(self, messages: list, temperature: float = 0.7) -> str:
         url = self.profile.baseUrl.rstrip("/") + "/chat/completions"
@@ -72,7 +93,9 @@ class ChatClient:
                     await asyncio.sleep(self._retry_delay(resp, attempt))
                     continue
                 resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]["content"]
+                data = resp.json()
+                self._record_usage(data)
+                return data["choices"][0]["message"]["content"]
             except httpx.TransportError as e:  # 连接失败 / 读写超时 / 网络抖动
                 last_exc = e
                 if attempt >= self.max_retries:
@@ -122,6 +145,7 @@ class ChatClient:
             resp = await self._client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
         data = resp.json()
+        self._record_usage(data)
         choice = (data.get("choices") or [{}])[0]
         content = (choice.get("message") or {}).get("content", "") or ""
         top: list = []

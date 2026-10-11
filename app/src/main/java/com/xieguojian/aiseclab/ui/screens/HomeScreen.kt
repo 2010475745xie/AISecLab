@@ -13,21 +13,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.report.modelLabel
@@ -52,7 +57,11 @@ fun HomeScreen(
     val state by vm.testState.collectAsState()
     val history by vm.history.collectAsState()
     val target by vm.target.collectAsState()
+    val tokens by TokenMeter.state.collectAsState()
     val timeFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    // 待删除的历史报告：非 null 时弹确认框。
+    // 删掉一轮测试是不可逆的（几十分钟 + 真金白银的 API 费用），之前垃圾桶图标一点就删。
+    var pendingDelete by remember { mutableStateOf<Report?>(null) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(20.dp),
@@ -78,8 +87,9 @@ fun HomeScreen(
         // 当前测试状态卡（已测试区分「正在测试 / 完成 / 出错」）
         item {
             when (val s = state) {
-                is TestViewModel.TestState.Running -> RunningCard(s.completed, s.total, onOpenRun)
-                is TestViewModel.TestState.Done -> DoneCard(onViewReport)
+                is TestViewModel.TestState.Running ->
+                    RunningCard(s.completed, s.total, tokens.summary(), onOpenRun)
+                is TestViewModel.TestState.Done -> DoneCard(tokens.summary(), onViewReport)
                 is TestViewModel.TestState.Error -> ErrorCard(s.message, onOpenRun)
                 else -> {}
             }
@@ -103,16 +113,42 @@ fun HomeScreen(
                     report = report,
                     timeText = timeFmt.format(Date(report.timestamp)),
                     onClick = { onOpenHistory(report) },
-                    onDelete = { vm.deleteHistory(report.timestamp) }
+                    onDelete = { pendingDelete = report }
                 )
             }
         }
+    }
+
+    // 删除确认：明确写出"哪一份"（模型 + 时间 + 分数），避免在长列表里点错行
+    pendingDelete?.let { toDelete ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除这条历史报告？") },
+            text = {
+                val score = if (toDelete.riskLevel == RiskLevel.UNKNOWN) "--"
+                else "%.1f 分".format(toDelete.overallScore)
+                Text(
+                    "${modelLabel(toDelete.modelProfile)}\n" +
+                        "${timeFmt.format(Date(toDelete.timestamp))} · $score\n\n" +
+                        "删除后无法恢复。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteHistory(toDelete.timestamp)
+                    pendingDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            }
+        )
     }
 }
 
 /** 正在测试：进度卡，点一下进运行页看实时终端。 */
 @Composable
-private fun RunningCard(completed: Int, total: Int, onClick: () -> Unit) {
+private fun RunningCard(completed: Int, total: Int, tokensText: String?, onClick: () -> Unit) {
     val fraction = if (total == 0) 0f else completed.toFloat() / total
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp)) {
@@ -125,18 +161,26 @@ private fun RunningCard(completed: Int, total: Int, onClick: () -> Unit) {
             LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(6.dp))
             Text("点此查看实时终端", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            tokensText?.let {
+                Spacer(Modifier.height(2.dp))
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }
 
 /** 测试完成：可点进报告。 */
 @Composable
-private fun DoneCard(onClick: () -> Unit) {
+private fun DoneCard(tokensText: String?, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp)) {
             Text("✓ 测试完成", style = MaterialTheme.typography.titleMedium, color = Color(0xFF1D9E75))
             Spacer(Modifier.height(6.dp))
             Text("本轮测试已完成，点击查看详细报告", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            tokensText?.let {
+                Spacer(Modifier.height(2.dp))
+                Text("本轮消耗 $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
 }

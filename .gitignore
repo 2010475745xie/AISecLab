@@ -15,6 +15,15 @@ local.properties
 
 # ── Packaging artifacts ──
 aiseclab-backend.zip
+/dist/
+
+# ── Release build output ──
+/app/release/
+
+# ── Signing material (never commit a keystore) ──
+keystore/
+*.jks
+*.keystore
 
 # ── Python ──
 __pycache__/

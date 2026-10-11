@@ -155,13 +155,20 @@ fun ReportScreen(
                     }
                 }
             }
-            Spacer(Modifier.height(24.dp))
-            Text("分维度得分", style = MaterialTheme.typography.titleMedium)
+        }
+
+        // ── 摘要：先给结论，再给数据 ──
+        // 原来摘要在维度卡片之后，用户得滚到底才知道"这轮到底怎么样"。
+        item {
+            Spacer(Modifier.height(16.dp))
+            Text("摘要", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(report.summary, style = MaterialTheme.typography.bodyMedium)
         }
 
         // ── 基线对比 ──
         item {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(20.dp))
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                 Text("基线对比", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.weight(1f))
@@ -238,6 +245,12 @@ fun ReportScreen(
             }
         }
 
+        // ── 分维度得分：标题紧跟卡片，别再被别的区块隔开 ──
+        item {
+            Spacer(Modifier.height(20.dp))
+            Text("分维度得分", style = MaterialTheme.typography.titleMedium)
+        }
+
         items(report.dimensions.values.sortedBy { it.dimension.ordinal }.toList()) { d ->
             val skippedHere = skippedByDim[d.dimension] ?: 0
             Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
@@ -264,10 +277,7 @@ fun ReportScreen(
         }
 
         item {
-            Spacer(Modifier.height(12.dp))
-            Text("摘要", style = MaterialTheme.typography.titleMedium)
-            Text(report.summary, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(20.dp))
             Text("失守明细", style = MaterialTheme.typography.titleMedium)
         }
 

@@ -59,6 +59,16 @@ class BackendClient {
     @Serializable
     private data class SessionCreated(val sessionId: String)
 
+    /** 后端累计的 token 用量（每次都发**累计值**，不是增量）。 */
+    @Serializable
+    private data class SseTokens(
+        val total: Long = 0,
+        val prompt: Long = 0,
+        val completion: Long = 0,
+        val calls: Int = 0,
+        val byRole: Map<String, Long> = emptyMap()
+    )
+
     /**
      * SSE 事件。后端字段全小写驼峰，与 data class 字段名一一对应；
      * 多数字段有默认值，未知字段被 json(ignoreUnknownKeys) 容忍。
@@ -70,7 +80,8 @@ class BackendClient {
         val total: Int = 0,
         val dimension: String? = null,
         val reportId: String? = null,
-        val message: String? = null
+        val message: String? = null,
+        val tokens: SseTokens? = null
     )
 
     /**
@@ -183,6 +194,10 @@ class BackendClient {
                     .getOrNull() ?: continue // 解析不出的行忽略，别因一帧坏数据断整轮
                 when (ev.event) {
                     "progress" -> {
+                        // 后端每帧都带累计用量，直接覆盖式写入 —— 与端上直连的累加语义不同
+                        ev.tokens?.let { t ->
+                            TokenMeter.setFromBackend(t.total, t.prompt, t.completion, t.calls, t.byRole)
+                        }
                         onProgress(ev.completed, ev.total)
                         // 后端 SSE 已带维度与可选 message：转成终端日志行
                         val dim = ev.dimension?.let { "[$it] " } ?: ""

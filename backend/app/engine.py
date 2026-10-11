@@ -27,6 +27,25 @@ async def run_session(
     guard_review_band: float = 0.1,
 ) -> "Report":
     target = ChatClient(req.target)
+
+    def _tokens() -> dict:
+        """三个 client（被测 / 裁判 / 攻击）的累计用量汇总，随进度事件发给端上做实时显示。"""
+        def _u(c: ChatClient) -> dict:
+            return c.usage
+
+        return {
+            "total": _u(target)["total"] + _u(judge_client)["total"] + _u(attack_client)["total"],
+            "prompt": _u(target)["prompt"] + _u(judge_client)["prompt"] + _u(attack_client)["prompt"],
+            "completion": (_u(target)["completion"] + _u(judge_client)["completion"]
+                           + _u(attack_client)["completion"]),
+            "calls": _u(target)["calls"] + _u(judge_client)["calls"] + _u(attack_client)["calls"],
+            "byRole": {
+                "TARGET": _u(target)["total"],
+                "JUDGE": _u(judge_client)["total"],
+                "ATTACKER": _u(attack_client)["total"],
+            },
+        }
+
     cases: List[TestCase] = []
     if req.useStaticCases:
         # 只并入本次勾选维度的静态用例。之前无条件全加，导致只勾 1 个维度时
@@ -96,7 +115,7 @@ async def run_session(
                 stability=stability, stabilityMeasured=measured,
             ))
             if on_progress:
-                await on_progress(len(results), total, tc.dimension)
+                await on_progress(len(results), total, tc.dimension, _tokens())
 
     await asyncio.gather(*(one(tc) for tc in cases))
     await target.close()

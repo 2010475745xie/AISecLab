@@ -25,10 +25,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.xieguojian.aiseclab.core.engine.modules.ConsistencyModule
+import com.xieguojian.aiseclab.core.engine.modules.FactualityModule
+import com.xieguojian.aiseclab.core.engine.modules.RobustnessModule
+import com.xieguojian.aiseclab.core.engine.modules.SecurityModule
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.RoleSource
 import com.xieguojian.aiseclab.ui.TestViewModel
@@ -43,6 +48,14 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         val localRun by vm.localRunEnabled.collectAsState()
     val state by vm.testState.collectAsState()
     val ctx = LocalContext.current
+
+    // 每个维度实际有多少条用例：让用户在点「开始测试」前就知道这一轮的规模。
+    // 条数直接决定耗时和 API 花费，而之前勾完维度是一点概念都没有的。
+    val casesPerDim = remember {
+        listOf(SecurityModule(), ConsistencyModule(), FactualityModule(), RobustnessModule())
+            .associate { it.dimension to it.buildCases().size }
+    }
+    val totalCases = selected.sumOf { casesPerDim[it] ?: 0 }
 
     Column(
         modifier = Modifier
@@ -67,6 +80,16 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
             }
         }
 
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (selected.isEmpty()) "未选择维度，无法开始测试"
+            else "本轮将评估 $totalCases 条用例：" + selected.sortedBy { it.ordinal }
+                .joinToString(" / ") { "${it.label} ${casesPerDim[it] ?: 0}" },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected.isEmpty()) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.primary
+        )
+
         Spacer(Modifier.height(16.dp))
         // 裁判 / 攻击者来源：AUTO=有辅助用辅助否则用目标自身；AUX=只用辅助；TARGET=目标自评/自攻。
         Text("裁判 / 攻击者来源", style = MaterialTheme.typography.titleMedium)
@@ -87,6 +110,22 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                 )
             }
         }
+        Spacer(Modifier.height(6.dp))
+        // 三选一却一个字都不解释，用户只能瞎猜 —— 尤其「目标自身」是让被测模型自己评自己，
+        // 这直接决定结论的说服力，必须写明白。
+        Text(
+            when (roleSource) {
+                RoleSource.AUTO ->
+                    "有辅助模型就用它做裁判 / 攻击者，没有则用目标模型自身。不确定时选这个。"
+                RoleSource.AUX ->
+                    "只用辅助模型；若未配置辅助模型，会回退到目标模型自身。"
+                RoleSource.TARGET ->
+                    "让目标模型自己评自己、自己攻自己。不需要额外模型，但「自己给自己打分」" +
+                        "的说服力较弱，建议只在没有辅助模型时使用。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
 
         Spacer(Modifier.height(16.dp))
         // 递归可用条件：攻击者能解析出端点。AUX 模式必须真有辅助模型；其余（TARGET / AUTO）总能用目标自身。
