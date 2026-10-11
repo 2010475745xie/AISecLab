@@ -15,6 +15,7 @@ AISecLab 后端一键部署脚本（Windows / macOS / Linux 通用）
 """
 
 import os
+import re
 import sys
 import socket
 import shutil
@@ -112,24 +113,88 @@ if not ok:
 
 
 # ── 7) 打印连接地址 ────────────────────────────────────────────
-def lan_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def _is_private(ip: str) -> bool:
+    """RFC1918 私网地址判定：10/8、172.16/12、192.168/16。"""
     try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
+        parts = [int(x) for x in ip.split(".")]
+    except (ValueError, AttributeError):
+        return False
+    if len(parts) != 4:
+        return False
+    a, b = parts[0], parts[1]
+    return (a == 10) or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168)
+
+
+def lan_ips() -> list:
+    """枚举所有可用于手机直连的 IPv4（去重、私网优先）。
+
+    不能只用「UDP connect 8.8.8.8 取源 IP」：那是**默认路由**出口，电脑一开
+    VPN / 代理 / 隧道，拿到的是隧道网卡地址（如 198.18.x.x），手机不在那个网段，
+    照抄横幅必然连不上（2026-10-07 真实踩坑）。与 standalone.py 保持同一实现。
+    """
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            ips.append(s.getsockname()[0])
+        finally:
+            s.close()
     except Exception:
-        return "127.0.0.1"
-    finally:
-        s.close()
+        pass
+
+    if os.name == "nt":
+        try:
+            ps = (
+                "Get-NetIPAddress -AddressFamily IPv4 | "
+                "Where-Object {$_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254*'} | "
+                "Select-Object -ExpandProperty IPAddress"
+            )
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                capture_output=True, timeout=12,
+            ).stdout.decode("utf-8", errors="ignore")
+            for line in out.splitlines():
+                line = line.strip()
+                if line and line not in ips:
+                    ips.append(line)
+        except Exception:
+            pass
+    else:
+        for cmd in (["ifconfig", "-a"], ["ip", "-4", "addr"]):
+            try:
+                out = subprocess.run(cmd, capture_output=True, timeout=8).stdout.decode(
+                    "utf-8", errors="ignore")
+                for m in re.finditer(r"inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)", out):
+                    ip = m.group(1)
+                    if ip not in ips:
+                        ips.append(ip)
+                if ips:
+                    break
+            except Exception:
+                continue
+
+    priv = [ip for ip in ips if _is_private(ip)]
+    other = [ip for ip in ips if not _is_private(ip)]
+    return priv + other
 
 
-ip = lan_ip()
+ips = lan_ips()
+ip = ips[0] if ips else "127.0.0.1"
 print("\n" + "=" * 60)
 print("  AISecLab 后端已启动")
 print("  请把下面地址填进手机 App「设置 -> 测试后端」：")
 print("    本机 / 模拟器 :  http://localhost:%s" % port)
 print("    手机同 Wi-Fi   :  http://%s:%s   <-- 一般用这个" % (ip, port))
 print("    健康检查       :  %s/health" % url)
+if len(ips) > 1:
+    print("-" * 60)
+    print("  其他网卡地址（填错地址是最常见的连不上原因）：")
+    for extra in ips[1:]:
+        tag = "私网" if _is_private(extra) else "非私网(可能是 VPN/虚拟网卡，手机多半连不上)"
+        print("    http://%s:%s   [%s]" % (extra, port, tag))
+    print("  提示：手机和电脑要在同一个 Wi-Fi/局域网；")
+    print("        若电脑开着 VPN，优先用上面的私网地址，并确认 VPN 没有阻断局域网入站。")
 print("=" * 60)
 print("  按 Ctrl+C 停止服务。\n")
 
