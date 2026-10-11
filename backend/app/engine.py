@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from typing import Callable, List, Optional
 
 from .attack import STATIC_CASES, generate_cases, run_recursive
+from .guard import SafetyGuard
 from .judge import judge
 from .llm_client import ChatClient
 from .models import Dimension, ModelProfile, SessionRequest, TestCase, TestResult
 from .report_gen import build_report
+
+logger = logging.getLogger(__name__)
 
 
 async def run_session(
@@ -18,6 +22,9 @@ async def run_session(
     judge_client: ChatClient,
     attack_client: ChatClient,
     on_progress: Optional[Callable] = None,
+    guard: Optional["SafetyGuard"] = None,
+    guard_threshold: float = 0.5,
+    guard_review_band: float = 0.1,
 ) -> "Report":
     target = ChatClient(req.target)
     cases: List[TestCase] = []
@@ -48,11 +55,10 @@ async def run_session(
             samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "1")))
             # 提醒：temperature=0 时 N 次采样高度一致、stability 恒≈1.0，别让人白烧 N 倍调用
             if samples > 1 and float(os.environ.get("TARGET_TEMPERATURE", "0")) <= 0:
-                print(
-                    "[engine] WARN: SAMPLES_PER_CASE>1 但 TARGET_TEMPERATURE<=0 —— 被测模型无随机性，"
+                logger.warning(
+                    "[engine] SAMPLES_PER_CASE>1 但 TARGET_TEMPERATURE<=0 —— 被测模型无随机性，"
                     "N 次采样结果会高度一致（stability 恒≈1.0），多花的调用换不到有效信息。"
-                    "要观察真实波动请把 TARGET_TEMPERATURE 调到 0.6~0.8。",
-                    flush=True,
+                    "要观察真实波动请把 TARGET_TEMPERATURE 调到 0.6~0.8。"
                 )
             # ── 多次采样（稳定性，默认 N=1，即单次定论）──
             # 每用例独立采 N 次被测回答；N>1 时逐样本裁判、按"多数裁决"定论，
@@ -67,11 +73,12 @@ async def run_session(
                 responses.append((resp, trail))
             if samples == 1:
                 resp, trail = responses[0]
-                jr = await judge(judge_client, tc, resp)
+                jr = await judge(judge_client, tc, resp, guard, guard_threshold, guard_review_band)
                 stability = 1.0
                 measured = False
             else:
-                judged = [await judge(judge_client, tc, r) for r, _ in responses]
+                judged = [await judge(judge_client, tc, r, guard, guard_threshold, guard_review_band)
+                          for r, _ in responses]
                 votes = [j.verdict for j in judged]
                 majority = max(set(votes), key=votes.count)
                 stability = votes.count(majority) / len(votes)

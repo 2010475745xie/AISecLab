@@ -100,6 +100,45 @@ def _attack_profile(req: SessionRequest) -> ModelProfile:
     return req.aux or _judge_profile(req)
 
 
+def _guard_env() -> dict:
+    """护栏相关环境变量。缺 BASE_URL/MODEL 时视为未配护栏（判定退化为纯规则层）。"""
+    return {
+        "base_url": (os.environ.get("GUARD_BASE_URL") or "").strip(),
+        "api_key": (os.environ.get("GUARD_API_KEY") or "").strip(),
+        "model": (os.environ.get("GUARD_MODEL") or "").strip(),
+        "threshold": float(os.environ.get("GUARD_THRESHOLD", "0.5")),
+        "review_band": float(os.environ.get("GUARD_REVIEW_BAND", "0.1")),
+    }
+
+
+def _build_guard(req: Optional[SessionRequest] = None):
+    """构建护栏（与端上 GuardMode 对应）。
+
+    - 未配 GUARD_BASE_URL/GUARD_MODEL → None（判定退化为纯规则层，与旧行为一致）；
+    - GUARD_MODE=user_llm → 用裁判模型当分类器（LlmSafetyGuard）；
+    - 默认 → HttpSafetyGuard 指向 OpenAI 兼容的护栏端点。
+    返回 (guard, threshold, review_band)。调用方负责 close 里挂着 client 的护栏。
+    """
+    cfg = _guard_env()
+    if not cfg["base_url"] or not cfg["model"]:
+        return None, cfg["threshold"], cfg["review_band"]
+
+    mode = (os.environ.get("GUARD_MODE") or "http_service").strip().lower()
+    if mode == "user_llm":
+        from .guard import LlmSafetyGuard
+        base = _judge_profile(req)  # 复用裁判端点
+        client = ChatClient(base)
+        return LlmSafetyGuard(client, base.model), cfg["threshold"], cfg["review_band"]
+
+    from .guard import HttpSafetyGuard
+    profile = ModelProfile(
+        id="guard", name=os.environ.get("GUARD_NAME", "guard"),
+        baseUrl=cfg["base_url"], apiKey=cfg["api_key"], model=cfg["model"],
+    )
+    client = ChatClient(profile)
+    return HttpSafetyGuard(client, cfg["base_url"]), cfg["threshold"], cfg["review_band"]
+
+
 @app.post("/v1/sessions")
 async def create_session(req: SessionRequest):
     sid = str(time.time_ns())
@@ -115,6 +154,7 @@ async def create_session(req: SessionRequest):
 async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
     judge_client = ChatClient(_judge_profile(req))
     attack_client = ChatClient(_attack_profile(req))
+    guard, g_threshold, g_review_band = _build_guard(req)
 
     async def on_progress(done, total, dim):
         await q.put(
@@ -129,7 +169,8 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         )
 
     try:
-        report = await run_session(req, judge_client, attack_client, on_progress)
+        report = await run_session(req, judge_client, attack_client, on_progress,
+                                   guard, g_threshold, g_review_band)
         sessions[sid]["report"] = report
         await q.put(json.dumps({"event": "done", "reportId": sid}))
     except Exception as e:  # noqa: BLE001
@@ -137,6 +178,8 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
     finally:
         await judge_client.close()
         await attack_client.close()
+        if guard is not None:
+            await guard.close()
 
 
 @app.get("/v1/sessions/{sid}/stream")
@@ -171,12 +214,15 @@ class JudgeBody(BaseModel):
 
 @app.post("/v1/judge")
 async def judge_one(body: JudgeBody):
-    """单条交裁判（端侧规则预筛不确定时调用）。"""
+    """单条交裁判（端侧规则预筛不确定时调用）。配了护栏则走护栏优先。"""
     jc = ChatClient(_judge_profile())
+    guard, g_th, g_band = _build_guard()
     try:
-        return await judge(jc, body.testCase, body.response)
+        return await judge(jc, body.testCase, body.response, guard, g_th, g_band)
     finally:
         await jc.close()
+        if guard is not None:
+            await guard.close()
 
 
 class GenBody(BaseModel):

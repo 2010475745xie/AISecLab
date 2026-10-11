@@ -157,6 +157,16 @@ def lan_ip() -> str:
     return ips[0] if ips else "127.0.0.1"
 
 
+# .env.example 里未填的占位值特征。直接照抄 .env.example 就启动时，
+# 不能把这些占位当真实配置注入环境（否则会得到一个指向假地址的裁判/护栏，报错更难懂）。
+_PLACEHOLDER_MARKERS = ("你的", "xxxx", "填写", "example", "changeme")
+
+
+def _looks_placeholder(v: str) -> bool:
+    low = v.lower()
+    return any(m in low or m in v for m in _PLACEHOLDER_MARKERS)
+
+
 def main():
     # 1) .env 初始化（放在 ROOT，与 run.bat 同级）
     env_path = os.path.join(ROOT, ".env")
@@ -171,12 +181,24 @@ def main():
                 break
 
     cfg = load_env(env_path)
+    # 把 .env 的值注入进程环境：main.py 在**请求时**读 os.environ 拿 JUDGE_* / GUARD_*。
+    # 之前这里只取出 PORT，其余键全部丢弃 —— 导致 exe 路径下 .env 里填的裁判/护栏配置
+    # **静默失效**（App 请求体自带 judge 所以没暴露，但服务端裁判与护栏会一直"没配"）。
+    for k, v in cfg.items():
+        if k == "PORT":
+            continue
+        if v and not _looks_placeholder(v):
+            os.environ[k] = v
     port = int(cfg.get("PORT") or os.environ.get("PORT") or "8000")
 
     import uvicorn
     from app.main import app  # 静态导入，确保整个 app 包被打进 exe
 
     print("\n=== AISecLab 后端启动中 (port=%d, 配置目录=%s) ===" % (port, ROOT))
+    _judge_ok = bool(os.environ.get("JUDGE_BASE_URL") and os.environ.get("JUDGE_MODEL"))
+    _guard_ok = bool(os.environ.get("GUARD_BASE_URL") and os.environ.get("GUARD_MODEL"))
+    print("  服务端裁判：%s" % ("已配置" if _judge_ok else "未配置（依赖 App 请求体自带 judge）"))
+    print("  护栏模型  ：%s" % ("已配置 → 判定走「护栏优先」" if _guard_ok else "未配置 → 判定走纯规则层"))
 
     # 2) 后台探测 /health（uvicorn.run 是阻塞的，这里用线程轮询并打印地址）
     def probe():

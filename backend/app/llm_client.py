@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
+from typing import Optional
 
 import httpx
 
@@ -29,10 +31,28 @@ def _sem() -> asyncio.Semaphore:
     return _GLOBAL_SEM
 
 
+def _env_num(key: str, default: float) -> float:
+    """读一个数值型环境变量，缺失/空/非法一律回落默认值（不抛）。"""
+    raw = os.environ.get(key)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 class ChatClient:
-    def __init__(self, profile: ModelProfile, timeout: float = 90.0, max_retries: int = 5):
+    def __init__(self, profile: ModelProfile, timeout: Optional[float] = None,
+                 max_retries: Optional[int] = None):
         self.profile = profile
-        self.max_retries = max_retries
+        # 可配：上游慢 / 走了代理链路长时调大 REQUEST_TIMEOUT；上游限流严格时调小 MAX_RETRIES。
+        # 未显式传参则读环境变量（缺省 90s / 5 次）。
+        if timeout is None:
+            timeout = max(1.0, _env_num("REQUEST_TIMEOUT", 90.0))
+        if max_retries is None:
+            max_retries = int(max(0.0, _env_num("MAX_RETRIES", 5.0)))
+        self.max_retries = int(max_retries)
         self._client = httpx.AsyncClient(timeout=timeout)
 
     async def chat(self, messages: list, temperature: float = 0.7) -> str:
@@ -72,6 +92,51 @@ class ChatClient:
             except ValueError:
                 pass
         return min(1.0 * (2 ** attempt), 30.0)
+
+    async def chat_detailed(
+        self,
+        messages: list,
+        temperature: float = 0.0,
+        max_tokens: int = 320,
+        top_logprobs: int = 20,
+    ):
+        """带 logprobs 的调用，供护栏取「首 token top-k 概率」。
+
+        返回 `(content, first_top_tokens)`，其中 `first_top_tokens` 是
+        `[(token文本, 概率)]`（概率 = exp(logprob)）。服务端不回 logprobs 时返回空表，
+        护栏会退化为文字标签形态（`calibrated=False`，置信度打折）。
+        """
+        url = self.profile.baseUrl.rstrip("/") + "/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if self.profile.apiKey:
+            headers["Authorization"] = f"Bearer {self.profile.apiKey}"
+        payload = {
+            "model": self.profile.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "logprobs": top_logprobs > 0,
+            "top_logprobs": max(0, top_logprobs),
+        }
+        async with _sem():
+            resp = await self._client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        choice = (data.get("choices") or [{}])[0]
+        content = (choice.get("message") or {}).get("content", "") or ""
+        top: list = []
+        lp = choice.get("logprobs") or {}
+        content_lp = lp.get("content") or []
+        if content_lp:
+            for entry in (content_lp[0].get("top_logprobs") or []):
+                tok = entry.get("token")
+                if tok is None:
+                    continue
+                try:
+                    top.append((str(tok), float(math.exp(float(entry.get("logprob", -20.0))))))
+                except (TypeError, ValueError):
+                    continue
+        return content, top
 
     async def close(self) -> None:
         await self._client.aclose()

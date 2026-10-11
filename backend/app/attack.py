@@ -14,11 +14,46 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .llm_client import ChatClient
 from .models import Dimension, ExpectedBehavior, TestCase
+
+logger = logging.getLogger(__name__)
+
+# 非法 expected 的兜底：LLM 常把枚举写成中文/自然语言（如"拒绝"、"应该拒绝"），
+# 直接 `ExpectedBehavior(value)` 会抛 ValueError。旧实现让这个异常把**整批**已解析
+# 用例一起吞掉（异常跳出 for 循环 → 后续条目全丢）。这里做宽松归一 + 逐条兜底。
+_EXPECTED_ALIASES = {
+    "refuse": ExpectedBehavior.SHOULD_REFUSE,
+    "refusal": ExpectedBehavior.SHOULD_REFUSE,
+    "reject": ExpectedBehavior.SHOULD_REFUSE,
+    "拒绝": ExpectedBehavior.SHOULD_REFUSE,
+    "answer": ExpectedBehavior.SHOULD_ANSWER_CORRECTLY,
+    "answer_correctly": ExpectedBehavior.SHOULD_ANSWER_CORRECTLY,
+    "correct": ExpectedBehavior.SHOULD_ANSWER_CORRECTLY,
+    "回答正确": ExpectedBehavior.SHOULD_ANSWER_CORRECTLY,
+    "consistent": ExpectedBehavior.SHOULD_STAY_CONSISTENT,
+    "consistency": ExpectedBehavior.SHOULD_STAY_CONSISTENT,
+    "保持一致": ExpectedBehavior.SHOULD_STAY_CONSISTENT,
+    "say_unknown": ExpectedBehavior.SHOULD_SAY_UNKNOWN,
+    "unknown": ExpectedBehavior.SHOULD_SAY_UNKNOWN,
+    "不知道": ExpectedBehavior.SHOULD_SAY_UNKNOWN,
+}
+
+
+def _coerce_expected(raw: object) -> ExpectedBehavior:
+    """把 LLM 给的各种写法尽量归一成枚举；实在不认识就回落 SHOULD_REFUSE（最常见默认）。"""
+    s = str(raw or "").strip()
+    if not s:
+        return ExpectedBehavior.SHOULD_REFUSE
+    try:
+        return ExpectedBehavior(s)
+    except ValueError:
+        pass
+    return _EXPECTED_ALIASES.get(s.lower(), ExpectedBehavior.SHOULD_REFUSE)
 
 
 # 内置静态回归用例集（全量 50 条，与 Android 端 4 个用例模块一一对应：安全18/一致11/事实10/鲁棒11）。
@@ -149,14 +184,28 @@ async def generate_cases(client: ChatClient, dimension: Dimension, count: int) -
     cases: List[TestCase] = []
     try:
         arr = json.loads(text[text.find("["):text.rfind("]") + 1])
-        for i, o in enumerate(arr):
+    except Exception as e:
+        # 整段不是合法 JSON 数组：整批丢弃（无法逐条救），但记日志，别静默。
+        logger.warning("generate_cases[%s] 无法解析 JSON 数组: %s", dimension.value, e)
+        return cases
+    if not isinstance(arr, list):
+        logger.warning("generate_cases[%s] 顶层不是数组，丢弃", dimension.value)
+        return cases
+    # 逐条容错：单条字段缺失/类型异常只跳过它，不再连累后面的用例。
+    for i, o in enumerate(arr):
+        try:
+            prompt = str(o["prompt"]).strip()
+            if not prompt:
+                logger.warning("generate_cases[%s] #%d 跳过：prompt 为空", dimension.value, i)
+                continue
             cases.append(TestCase(
                 id=f"gen-{dimension.value}-{i}", dimension=dimension,
-                title=str(o.get("title", ""))[:40], prompt=o["prompt"],
-                expected=ExpectedBehavior(str(o.get("expected", "SHOULD_REFUSE"))),
+                title=str(o.get("title", ""))[:40], prompt=prompt,
+                expected=_coerce_expected(o.get("expected")),
             ))
-    except Exception:
-        pass
+        except Exception as e:
+            logger.warning("generate_cases[%s] #%d 跳过非法用例: %s", dimension.value, i, e)
+            continue
     return cases
 
 
