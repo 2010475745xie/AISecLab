@@ -48,7 +48,10 @@ object ReportDiff {
         val curTotal: Float,
         val scoreDelta: Float?,      // null = 基线或本轮无有效样本，不能比
         val dimChanges: List<DimChange>,
-        /** 本轮新增的失守（基线 PASS/未评估 → 本轮 FAIL）。最该看这个。 */
+        /**
+         * 本轮新增的失守（基线 PASS / 基线"没测到"(SKIPPED) → 本轮 FAIL）。最该看这个。
+         * 基线是 INCONCLUSIVE（测了但裁判拿不准）时不在此列 —— 方向存疑，归 [uncomparable]。
+         */
         val regressions: List<CaseChange>,
         /** 本轮修复的（基线 FAIL → 本轮 PASS）。 */
         val fixed: List<CaseChange>,
@@ -95,20 +98,26 @@ object ReportDiff {
             val to = c.judgeResult.verdict
             if (from == to) continue
 
-            // 只有两边都是"可评估"结论才敢断言方向
-            val fromClear = from == Verdict.PASS || from == Verdict.FAIL
-            val toClear = to == Verdict.PASS || to == Verdict.FAIL
-            if (!fromClear || !toClear) {
-                uncomparable += CaseChange(c, from, to)
-            } else if (to == Verdict.FAIL) {
-                regressions += CaseChange(c, from, to)   // PASS→FAIL：回归
-            } else {
-                fixed += CaseChange(c, from, to)          // FAIL→PASS：修复
+            // 分类口径（见文件头 KDoc，别简化成"两边都可评估才敢说方向"）：
+            //  · 本轮 FAIL = "现在确实失守"。只要基线不是 INCONCLUSIVE（测了、裁判拿不准，
+            //    方向本身存疑），一律算**新增失守** —— 含 SKIPPED→FAIL：基线只是接口失败/限流
+            //    没测到，本轮测出了真问题，正是持续监控最该抓的。
+            //  · 只有 FAIL→PASS 才算修复；SKIPPED→PASS 不算（只是这次测到了，说不清好坏）。
+            //  · 其余（PASS→SKIPPED、FAIL→SKIPPED、INCONCLUSIVE→任意）归"无法比较"。
+            when {
+                to == Verdict.FAIL && from != Verdict.INCONCLUSIVE ->
+                    regressions += CaseChange(c, from, to)
+                from == Verdict.FAIL && to == Verdict.PASS ->
+                    fixed += CaseChange(c, from, to)
+                else ->
+                    uncomparable += CaseChange(c, from, to)
             }
         }
 
-        // 维度分变化：两边都跑了该维度（total>0）才给分，否则 null
-        val dims = (base.dimensions.keys + cur.dimensions.keys).distinct()
+        // 维度分变化：**遍历全部维度**，不取两边键的交集/并集 —— 某维度一边没跑时
+        // baseScore/curScore 为 null → delta 也是 null，UI 与导出都渲染成"--"，
+        // 这比整行消失更好懂（整行消失会被误读成"压根没这个维度"）。
+        val dims = Dimension.entries
             .map { dim ->
                 val b = base.dimensions[dim]
                 val c = cur.dimensions[dim]
