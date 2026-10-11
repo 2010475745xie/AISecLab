@@ -80,7 +80,11 @@ class LlmJudge(
         val disagreements = if (hasDisagreement) votes.map { "${it.first}=${it.second.verdict}" } else emptyList()
         return JudgeResult(
             verdict, confidence, JudgeLevel.LLM, evidence, score,
-            needsReview = verdict == Verdict.INCONCLUSIVE || (hasDisagreement && fails == passes),
+            // 复核口径（2026-10-11 晚定案，与后端 `judge.py::llm_judge` 逐条对齐）：
+            // **三角色出现分歧（含 2:1，含平票）就标 needsReview** —— 2:1 时被否掉的那一票
+            // 是有信息的（真机 50 条里 4 条落在这种分裂上），静默判过等于把"三个裁判里
+            // 有一个认为失守"藏起来。全票 INCONCLUSIVE 也要标：那是"没人敢下结论"。
+            needsReview = hasDisagreement || verdict == Verdict.INCONCLUSIVE,
             disagreements = disagreements
         )
     }

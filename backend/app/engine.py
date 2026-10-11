@@ -16,6 +16,9 @@ from .report_gen import build_report
 
 logger = logging.getLogger(__name__)
 
+# 下面这条提醒每次进程只打一次：N=3 时它会跟着 50 条用例重复 50 遍，把日志刷满。
+_warned_samples_temp = False
+
 
 async def run_session(
     req: SessionRequest,
@@ -68,23 +71,28 @@ async def run_session(
             # recursive=False 时只跑 1 轮。之前无条件调用 run_recursive（默认 10 轮），
             # 开关形同虚设——用户关了递归对抗，仍在多轮改写强攻，既烧 token 又制造假阳性。
             rounds = 10 if req.recursive else 1
-            # 默认 1：与默认 TARGET_TEMPERATURE=0 自洽（温度 0 下多次采样结果一致，
-            # stability 恒 1.0，N>1 只是白烧 N 倍调用）。要做稳定性实验时再调大，
-            # 并同时把 TARGET_TEMPERATURE 设为 0.6~0.8。
+            # 默认 1（单次定论，最省）。>1 时逐样本裁判、按多数裁决定论 —— 这是抗「边界用例
+            # 结论在两次运行间漂移」的手段，代价是目标 + 裁判调用量 ×N。
             samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "1")))
-            # 提醒：temperature=0 时 N 次采样高度一致、stability 恒≈1.0，别让人白烧 N 倍调用
-            if samples > 1 and float(os.environ.get("TARGET_TEMPERATURE", "0")) <= 0:
-                logger.warning(
-                    "[engine] SAMPLES_PER_CASE>1 但 TARGET_TEMPERATURE<=0 —— 被测模型无随机性，"
-                    "N 次采样结果会高度一致（stability 恒≈1.0），多花的调用换不到有效信息。"
-                    "要观察真实波动请把 TARGET_TEMPERATURE 调到 0.6~0.8。"
+            # ⚠️ 2026-10-11 实测修正：以前这里断言「temperature=0 → N 次采样结果一致、
+            # N>1 纯属白烧调用」。**真机证伪**：同一 prompt 两次回答逐字不同（被测端点忽略
+            # temperature，或模型自身非确定），导致 con-contra-1 / fact-known-1 这类边界用例
+            # 的结论在两次运行间翻转。所以 N>1 是有价值的，不再一律劝阻，只做一次性提示。
+            global _warned_samples_temp
+            if samples > 1 and float(os.environ.get("TARGET_TEMPERATURE", "0")) <= 0 and not _warned_samples_temp:
+                _warned_samples_temp = True
+                logger.info(
+                    "[engine] SAMPLES_PER_CASE=%d 且 TARGET_TEMPERATURE<=0：若被测端点确实遵守 "
+                    "temperature（确定性输出），N 次采样会一致、stability 恒 1.0；"
+                    "若它忽略 temperature（实测常见），多数裁决就是在替你压掉边界抖动的噪声。"
+                    "两种情况都不会误报，放心跑。", samples,
                 )
             # ── 多次采样（稳定性，默认 N=1，即单次定论）──
             # 每用例独立采 N 次被测回答；N>1 时逐样本裁判、按"多数裁决"定论，
             # stability = 多数派占比，低一致性（<80%）会在报告里标红。
-            # 要观察到方差需被测模型 temperature>0（用 TARGET_TEMPERATURE 覆盖）；
-            # 默认 TARGET_TEMPERATURE=0 时采样结果基本一致，stability 恒为 1.0（可复现），
-            # 故默认 N=1——N>1 只有在同时调高温度时才有信息量。
+            # 2026-10-11 实测修正：以前写「TARGET_TEMPERATURE=0 时采样结果基本一致，
+            # stability 恒为 1.0，故 N=1 就够」—— **被真机证伪**，同题两次回答逐字不同。
+            # 现在 N=3 的定位是「多数裁决压噪声 + stability 作为真实信号」，不再只是实验开关。
             t0 = time.time()
             responses = []
             for _ in range(samples):
