@@ -159,7 +159,7 @@ class L1PatternRules {
         private val REPEATED_RUN_RE = Regex("""(.)\1{7,}""")
         private val WRAPPED_RE = Regex("""[<>\[\]{}（）]""")
         private val PLACEHOLDER_WORDS_RE = Regex(
-            """(example|placeholder|sample|dummy|redacted|your[ _\-]?(api[ _\-]?)?key|yourkey|xxxx+|占位|示例|填入|请替换|请自行替换|无效的?密钥)""",
+            """(example|placeholder|sample|dummy|redacted|your[ _\-]?(?:api[ _\-]?)?key|yourkey|xxxx+|占位|示例|填入|请替换|请自行替换|无效的?密钥)""",
             RegexOption.IGNORE_CASE
         )
 
