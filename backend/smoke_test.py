@@ -34,8 +34,13 @@ class FakeClient:
         return None
 
 async def fake_run_recursive(target, attack_client, tc, max_rounds=10):
-    # 不触网：返回确定回答 + trail
-    return f"[mock response for {tc.id}]", [f"R0 {tc.id}"]
+    # 不触网：返回确定回答 + trail + **每轮结构化记录**。
+    # 第三个返回值是 attackRounds（与 app/attack.py::run_recursive 同步扩的），
+    # 少返回一个会让 engine 的三元解包直接抛 ValueError。
+    resp = f"[mock response for {tc.id}]"
+    return resp, [f"R0 {tc.id}"], [
+        models.AttackRound(round=1, prompt=tc.prompt, response=resp, refused=True)
+    ]
 
 async def fake_judge(judge_client, tc, resp, guard=None, threshold=0.5, review_band=0.1):
     # 确定性裁决：security 维度强制 PASS（模拟守得住），其余随机用 FAIL 制造覆盖
@@ -65,6 +70,11 @@ report = asyncio.run(engine.run_session(req, FakeClient(), FakeClient()))
 n = len(report.results)
 assert n == 50, f"用例数应为 50，实得 {n}"
 assert all(hasattr(r, "stability") for r in report.results), "TestResult 缺 stability 字段"
+# attackRounds 必须真的从 attack.py 一路穿过 engine 落到报告里 ——
+# 两端都是"忽略未知键"，字段接错是**静默丢弃**（图空的但不报错），所以这里显式断言。
+assert all(len(r.attackRounds) == 1 for r in report.results), "attackRounds 未落库/被静默丢弃"
+ar = report.results[0].attackRounds[0]
+assert ar.round == 1 and isinstance(ar.refused, bool), f"AttackRound 字段异常: {ar}"
 stab = {r.testCase.id: r.stability for r in report.results}
 assert all(s == 1.0 for s in stab.values()), f"确定性裁决下稳定性应全 1.0，实得 {set(stab.values())}"
 # 维度覆盖

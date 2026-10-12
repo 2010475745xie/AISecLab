@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab.core.report
 
+import com.xieguojian.aiseclab.core.model.JudgeLevel
 import com.xieguojian.aiseclab.core.model.ModelProfile
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
@@ -129,6 +130,13 @@ object ReportGenerator {
                 append("- 攻击轨迹：\n")
                 r.attackTrail.forEach { append("  - $it\n") }
             }
+            // 攻击演进：纯文本版的时间轴（每步的轮次 + 是否破防）。Markdown 画不了 SVG，
+            // 但信号不能死在数据结构里 —— 少了这一段，attackRounds 就只有 HTML 导出看得到。
+            if (r.attackRounds.isNotEmpty()) {
+                append("- 攻击演进：" + r.attackRounds.joinToString(" → ") {
+                    "第${it.round}步" + if (it.refused) "未破防" else "**破防**"
+                } + "\n")
+            }
             append("\n")
         }
 
@@ -236,6 +244,39 @@ object ReportGenerator {
 
         append("<h2>摘要</h2><p>${report.summary}</p>")
 
+        // ── 图表：内联 SVG，不依赖 JS / CDN ──
+        // 导出的报告要能在**没网、没脚本**的环境打开（审计存档、微信/邮件预览）。
+        // 配色与图例都取自 core/report 里那一份，与报告页同源，不会走岔。
+        val heatSvg = ChartSvg.heatmap(report.results)
+        if (heatSvg.isNotEmpty()) {
+            append("<h2>用例热力图</h2><div style=\"overflow-x:auto\">").append(heatSvg).append("</div>")
+            append("<p class=\"meta\">").append(escapeHtml(ChartLegend.HEATMAP)).append("</p>")
+        }
+        val partitionSvg = ChartSvg.bars(
+            listOf(
+                Triple("失守", sections.fails.size, ChartPalette.FAIL),
+                Triple("待人工复核", sections.reviewOnly.size, ChartPalette.INCONCLUSIVE),
+                Triple("通过", sections.passPlain.size, ChartPalette.PASS),
+                Triple("不可评估·调用失败", sections.skipped.size, ChartPalette.SKIPPED),
+                Triple("不可评估·判定拿不准", sections.inconclusive.size, ChartPalette.INCONCLUSIVE)
+            )
+        )
+        if (partitionSvg.isNotEmpty()) {
+            append("<h2>分区分布</h2><div style=\"overflow-x:auto\">").append(partitionSvg).append("</div>")
+            append("<p class=\"meta\">").append(escapeHtml(ChartLegend.BARS)).append("</p>")
+        }
+        val levelSvg = ChartSvg.bars(
+            listOf(
+                Triple("L1 正则", report.results.count { it.judgeResult.level == JudgeLevel.L1_PATTERN }, ChartPalette.PASS),
+                Triple("L2 语义", report.results.count { it.judgeResult.level == JudgeLevel.L2_SEMANTIC }, ChartPalette.PASS),
+                Triple("L3 结构", report.results.count { it.judgeResult.level == JudgeLevel.L3_STRUCTURAL }, ChartPalette.PASS),
+                Triple("LLM 裁判", report.results.count { it.judgeResult.level == JudgeLevel.LLM }, ChartPalette.PASS)
+            )
+        )
+        if (levelSvg.isNotEmpty()) {
+            append("<h2>判定层级分布</h2><div style=\"overflow-x:auto\">").append(levelSvg).append("</div>")
+        }
+
         // ── 基线对比章节（选了基线才有）──
         if (diff != null) {
             append("<h2>基线对比</h2>")
@@ -309,6 +350,10 @@ object ReportGenerator {
             if (r.judgeResult.disagreements.isNotEmpty()) append("<br>分歧记录：${r.judgeResult.disagreements.joinToString("；")}")
             if (r.attackTrail.isNotEmpty()) {
                 append("<br>攻击轨迹：<pre>${escapeHtml(r.attackTrail.joinToString("\n"))}</pre>")
+            }
+            val tl = ChartSvg.timeline(r.attackRounds)
+            if (tl.isNotEmpty()) {
+                append("<br>攻击演进：<br><div style=\"overflow-x:auto\">").append(tl).append("</div>")
             }
             append("</div>")
         }

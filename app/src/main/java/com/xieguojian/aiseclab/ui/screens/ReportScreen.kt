@@ -34,7 +34,14 @@ import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.report.ReportDiff
 import com.xieguojian.aiseclab.core.report.ReportSections
+import com.xieguojian.aiseclab.core.model.JudgeLevel
+import com.xieguojian.aiseclab.core.report.ChartLegend
+import com.xieguojian.aiseclab.core.report.ChartPalette
 import com.xieguojian.aiseclab.core.report.modelLabel
+import com.xieguojian.aiseclab.ui.chart.BarItem
+import com.xieguojian.aiseclab.ui.chart.MiniBar
+import com.xieguojian.aiseclab.ui.chart.MiniHeatmap
+import com.xieguojian.aiseclab.ui.chart.TimelineTrack
 import com.xieguojian.aiseclab.ui.TestViewModel
 import java.io.File
 import java.text.SimpleDateFormat
@@ -103,6 +110,14 @@ fun ReportScreen(
     //    （FindingItem 有证据链、SkippedItem 只有票型），看起来像两条不同的问题。
     val reviewOnly = sections.reviewOnly
     val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
+
+    // 攻击演进：只列 ≥2 步的用例、按步数降序。单步没有"演进"可言，
+    // 50 条全画又会让报告长出好几屏（手机上尤其）。
+    // ⚠️ 必须在 LazyColumn **外面**算：里面是 LazyListScope、不是 @Composable 上下文，
+    // 在那儿调 remember 直接编译不过（2026-10-12 踩过）。
+    val trailCases = report.results
+        .filter { it.attackRounds.size >= 2 }
+        .sortedByDescending { it.attackRounds.size }
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
@@ -174,6 +189,55 @@ fun ReportScreen(
             Text("摘要", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(6.dp))
             Text(report.summary, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        // ── 图表：用例矩阵 / 分区分布 / 判定层级 ──
+        // 取数一律来自已有的 ReportSections 与 JudgeResult，**这里不做任何新判定**
+        //（自己写 filter 数一遍正是 ReportSections 存在的理由）。
+        // 图例文案与 HTML 导出共用 core/report/ChartLegend，避免两处说法不一致。
+        item {
+            Spacer(Modifier.height(20.dp))
+            Text("用例热力图", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            MiniHeatmap(report.results)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                ChartLegend.HEATMAP,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        item {
+            Spacer(Modifier.height(18.dp))
+            Text("分区分布", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            MiniBar(
+                listOf(
+                    BarItem("失守", sections.fails.size, ChartPalette.FAIL),
+                    BarItem("待人工复核", sections.reviewOnly.size, ChartPalette.INCONCLUSIVE),
+                    BarItem("通过", sections.passPlain.size, ChartPalette.PASS),
+                    BarItem("不可评估·调用失败", sections.skipped.size, ChartPalette.SKIPPED),
+                    BarItem("不可评估·判定拿不准", sections.inconclusive.size, ChartPalette.INCONCLUSIVE)
+                )
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                ChartLegend.BARS,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        item {
+            Spacer(Modifier.height(18.dp))
+            Text("判定层级分布", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            MiniBar(
+                JudgeLevel.values().map { lv ->
+                    BarItem(levelLabel(lv), levelCount(report, lv), ChartPalette.PASS)
+                }
+            )
         }
 
         // ── 基线对比 ──
@@ -295,6 +359,48 @@ fun ReportScreen(
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
                         )
+                    }
+                }
+            }
+        }
+
+        // ── 攻击演进（时间轴）──
+        if (trailCases.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(20.dp))
+                Text("攻击演进", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    ChartLegend.TIMELINE,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (trailCases.size > TRAIL_CASES_SHOWN) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "共 ${trailCases.size} 条用例有多步攻击，这里按步数取前 $TRAIL_CASES_SHOWN 条。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            items(trailCases.take(TRAIL_CASES_SHOWN)) { r ->
+                Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text(
+                                "${r.testCase.dimension.label} · ${r.testCase.title}",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                "${r.attackRounds.size} 步 · ${r.judgeResult.verdict}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        TimelineTrack(r.attackRounds)
                     }
                 }
             }
@@ -501,6 +607,20 @@ private fun ChangeItem(c: ReportDiff.CaseChange, fromText: String, toText: Strin
 
 private fun timeFmtOnly(ts: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(ts))
+
+/** 时间轴区块最多画几条用例 —— 超出只给计数，避免报告被图表淹掉。 */
+private const val TRAIL_CASES_SHOWN = 8
+
+/** 判定层级分布取数：只认 `JudgeResult.level`，不做任何新判定。 */
+private fun levelCount(report: Report, level: JudgeLevel): Int =
+    report.results.count { it.judgeResult.level == level }
+
+private fun levelLabel(level: JudgeLevel): String = when (level) {
+    JudgeLevel.L1_PATTERN -> "L1 正则"
+    JudgeLevel.L2_SEMANTIC -> "L2 语义"
+    JudgeLevel.L3_STRUCTURAL -> "L3 结构"
+    JudgeLevel.LLM -> "LLM 裁判"
+}
 
 private fun riskText(level: RiskLevel): String = when (level) {
     RiskLevel.LOW -> "低风险"

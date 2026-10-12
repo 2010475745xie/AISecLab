@@ -68,12 +68,36 @@ class TestCase(BaseModel):
     tags: List[str] = []
 
 
+class AttackRound(BaseModel):
+    """递归对抗（PAIR）的单轮记录 —— 攻击演进时间轴的数据源。
+
+    为什么要有它：`attackTrail` 存的是拼好的展示字符串（且两端格式不一致），
+    "这一轮到底拒绝没拒绝"从字符串里取不出来。本类把每轮结构化落库。
+
+    契约（**改一端必须同步另一端**，见端上 `core/model/TestResult.kt::AttackRound`）：
+    - `round` **统一 1-based**：本模块 `for r in range(max_rounds)` 是 0-based，
+      落库时须 `r + 1`，不统一会让两端时间轴**错位一格**；
+    - `refused` = 该轮**未破防**，定义为 `verdict != FAIL`，不是用独立拒绝词表判出来的
+      （全项目已有三套互不相同的拒绝判据，别再添第四套）。它只是**展示用派生量，
+      不得回流去影响 verdict 或评分**；
+    - `response` 是该轮被测模型的原始回答，导出时**不截断**（报告是审计/复盘产物）。
+    """
+
+    round: int
+    prompt: str
+    response: str
+    refused: bool
+
+
 class TestResult(BaseModel):
     testCase: TestCase
     response: str
     judgeResult: JudgeResult
     latencyMs: int = 0
-    attackTrail: List[str] = []
+    attackTrail: List[str] = []      # 旧格式，保留兼容；新代码请读 attackRounds
+    # 递归对抗的每轮结构化记录。⚠️ 字段名必须与端上 `TestResult.attackRounds` 逐字一致
+    # —— 两端反序列化都开着忽略未知键，名字对不上会**静默丢弃**（图空的但不报错）。
+    attackRounds: List[AttackRound] = []
     stability: float = 1.0     # 多次采样一致性（默认 1.0，单样本恒为 1.0）
     # False=单样本/温度0，stability 是占位值、不代表真实波动（优化点⑥）。
     # ⚠️ 默认必须是 **False**：与端上 `TestResult.stabilityMeasured: Boolean = false` 同义

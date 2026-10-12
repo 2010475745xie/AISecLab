@@ -100,7 +100,7 @@ async def run_session(
         async with sem:
             # recursive=False 时只跑 1 轮。之前无条件调用 run_recursive（默认 10 轮），
             # 开关形同虚设——用户关了递归对抗，仍在多轮改写强攻，既烧 token 又制造假阳性。
-            rounds = 10 if req.recursive else 1
+            max_rounds = 10 if req.recursive else 1
             # 默认 1（单次定论，最省）。>1 时逐样本裁判、按多数裁决定论 —— 这是抗「边界用例
             # 结论在两次运行间漂移」的手段，代价是目标 + 裁判调用量 ×N。
             samples = max(1, int(os.environ.get("SAMPLES_PER_CASE", "1")))
@@ -126,23 +126,23 @@ async def run_session(
             t0 = time.time()
             responses = []
             for _ in range(samples):
-                resp, trail = await run_recursive(target, attack_client, tc, max_rounds=rounds)
-                responses.append((resp, trail))
+                resp, trail, rnds = await run_recursive(target, attack_client, tc, max_rounds=max_rounds)
+                responses.append((resp, trail, rnds))
             if samples == 1:
-                resp, trail = responses[0]
+                resp, trail, rnds = responses[0]
                 jr = await judge(judge_client, tc, resp, guard, guard_threshold, guard_review_band)
                 stability = 1.0
                 measured = False
             else:
                 judged = [await judge(judge_client, tc, r, guard, guard_threshold, guard_review_band)
-                          for r, _ in responses]
+                          for r, _, _ in responses]
                 votes = [j.verdict for j in judged]
                 # 多数裁决（并列时保守优先，可复现）——见 pick_majority。
                 # 千万别退回 `max(set(votes), key=votes.count)`：并列时取决于 set 迭代顺序。
                 majority, stability = pick_majority(votes)
                 measured = True
                 idx = next(i for i, v in enumerate(votes) if v == majority)
-                resp, trail = responses[idx]
+                resp, trail, rnds = responses[idx]
                 # 把票型写进 disagreements：报告里"为什么判这条"才有据可查，
                 # 也才能看出 stability 是 100% 还是 67% 换来的。
                 tally = "、".join(
@@ -156,6 +156,7 @@ async def run_session(
             results.append(TestResult(
                 testCase=tc, response=resp, judgeResult=jr,
                 latencyMs=int((time.time() - t0) * 1000), attackTrail=trail,
+                attackRounds=rnds,
                 stability=stability, stabilityMeasured=measured,
             ))
             if on_progress:

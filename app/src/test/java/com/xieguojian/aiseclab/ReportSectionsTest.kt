@@ -88,8 +88,19 @@ class ReportSectionsTest {
 
         assertEquals(listOf("fail-review"), s.fails.map { it.testCase.id })
         assertEquals(listOf("ok-review"), s.reviewOnly.map { it.testCase.id })
+        assertEquals(listOf("ok-plain"), s.passPlain.map { it.testCase.id })
         assertEquals(listOf("skip-review", "skip-plain"), s.skipped.map { it.testCase.id })
         assertEquals(listOf("incon-review"), s.inconclusive.map { it.testCase.id })
+
+        // 五路互斥且完备：求和必须等于用例总数（图表靠这个计数，别让某条落到五路之外）。
+        assertEquals(results.size, s.total)
+        assertEquals(
+            results.map { it.testCase.id }.toSet(),
+            (s.fails + s.reviewOnly + s.passPlain + s.skipped + s.inconclusive)
+                .map { it.testCase.id }.toSet()
+        )
+        // 「干净通过」不得混进待复核 —— 两边的判据必须是互补的，不能都收 or 都不收。
+        assertTrue(s.passPlain.none { it.judgeResult.needsReview })
 
         // 完备性：进桶的恰好是「非 PASS，或 PASS 但带复核标记」那批；两条普通 PASS 不该进任何桶。
         val placed = (s.fails + s.reviewOnly + s.unassessed).map { it.testCase.id }
