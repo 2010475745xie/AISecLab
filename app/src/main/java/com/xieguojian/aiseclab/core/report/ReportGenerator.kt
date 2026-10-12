@@ -3,7 +3,6 @@ package com.xieguojian.aiseclab.core.report
 import com.xieguojian.aiseclab.core.model.ModelProfile
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
-import com.xieguojian.aiseclab.core.model.Verdict
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +29,8 @@ object ReportGenerator {
 
     fun toMarkdown(report: Report, diff: ReportDiff.Result? = null): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
+        // 分区与报告页 / HTML 导出共用一份实现（ReportSections）—— 判据抄三遍必然走岔。
+        val sections = ReportSections.of(report)
         append("# AISecLab 测评报告\n\n")
         append("**模型**：${modelLabel(report.modelProfile)}  \n")
         append("**时间**：${formatTime(report.timestamp)}  \n")
@@ -110,7 +111,7 @@ object ReportGenerator {
         }
 
         append("## 失守明细\n\n")
-        val fails = report.results.filter { it.judgeResult.verdict == Verdict.FAIL }
+        val fails = sections.fails
         if (fails.isEmpty()) {
             append(if (noEvidence) "本轮无有效样本，未产生失守结论。\n\n" else "未发现失守用例。\n\n")
         }
@@ -131,15 +132,12 @@ object ReportGenerator {
             append("\n")
         }
 
-        // ── 待复核：判过但证据链里有未消解的分歧 ──
-        // 失守用例上面已经逐条列过了，这里只列"非失守、也非不可评估"的，避免同一条出现两遍。
-        // ⚠️ 必须同时排除 INCONCLUSIVE：它一律 needsReview=true，下面「不可评估」章节已经列过，
-        // 不排除就会在导出文档里重复出现。
-        val reviewOnly = report.results.filter {
-            it.judgeResult.needsReview &&
-                it.judgeResult.verdict != Verdict.FAIL &&
-                it.judgeResult.verdict != Verdict.INCONCLUSIVE
-        }
+        // ── 待人工复核：判过但证据链里有未消解的分歧 ──
+        // 只列"判成 PASS、非失守、非不可评估"的那批，避免同一条在文档里出现两遍：
+        //  · 失守用例上面已经逐条列过；
+        //  · SKIPPED / INCONCLUSIVE 一律 needsReview（INCONCLUSIVE 必真），
+        //    下面「不可评估」章节已经列过，不排除就会重复出现。
+        val reviewOnly = sections.reviewOnly
         if (reviewOnly.isNotEmpty()) {
             append("## 待人工复核 ${reviewOnly.size} 条\n\n")
             append("这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，")
@@ -157,8 +155,8 @@ object ReportGenerator {
         // ── 不可评估：调用失败（SKIPPED）+ 判定拿不准（INCONCLUSIVE），两者都剔出分母 ──
         // 必须分开列：成因完全不同（一个是网络/限流，一个是裁判没形成多数），
         // 混在一起用户不知道该去查网络还是查模型。
-        val skipped = report.results.filter { it.judgeResult.verdict == Verdict.SKIPPED }
-        val inconclusive = report.results.filter { it.judgeResult.verdict == Verdict.INCONCLUSIVE }
+        val skipped = sections.skipped
+        val inconclusive = sections.inconclusive
         if (skipped.isNotEmpty() || inconclusive.isNotEmpty()) {
             append("## 不可评估 ${skipped.size + inconclusive.size} 条\n\n")
             append("这些用例未计入失守率与总分。它们不代表模型有风险，也不代表模型安全。\n\n")
@@ -182,6 +180,7 @@ object ReportGenerator {
 
     fun toHtml(report: Report, diff: ReportDiff.Result? = null): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
+        val sections = ReportSections.of(report)
         val riskColor = when (report.riskLevel) {
             RiskLevel.LOW -> "#1D9E75"
             RiskLevel.MEDIUM -> "#BA7517"
@@ -294,7 +293,7 @@ object ReportGenerator {
         }
 
         append("<h2>失守明细</h2>")
-        val fails = report.results.filter { it.judgeResult.verdict == Verdict.FAIL }
+        val fails = sections.fails
         if (fails.isEmpty()) {
             append("<p>${if (noEvidence) "本轮无有效样本，未产生失守结论。" else "未发现失守用例。"}</p>")
         }
@@ -314,12 +313,8 @@ object ReportGenerator {
             append("</div>")
         }
 
-        // ── 待复核：判过但证据链里有未消解的分歧（非失守、非不可评估的那部分）──
-        val reviewOnly = report.results.filter {
-            it.judgeResult.needsReview &&
-                it.judgeResult.verdict != Verdict.FAIL &&
-                it.judgeResult.verdict != Verdict.INCONCLUSIVE
-        }
+        // ── 待人工复核：判过但证据链里有未消解的分歧（非失守、非不可评估的那部分）──
+        val reviewOnly = sections.reviewOnly
         if (reviewOnly.isNotEmpty()) {
             append("<h2>待人工复核 ${reviewOnly.size} 条</h2>")
             append("<p>这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，")
@@ -335,8 +330,8 @@ object ReportGenerator {
         }
 
         // ── 不可评估：调用失败 + 判定拿不准，分开列（成因不同，修法也不同）──
-        val skipped = report.results.filter { it.judgeResult.verdict == Verdict.SKIPPED }
-        val inconclusive = report.results.filter { it.judgeResult.verdict == Verdict.INCONCLUSIVE }
+        val skipped = sections.skipped
+        val inconclusive = sections.inconclusive
         if (skipped.isNotEmpty() || inconclusive.isNotEmpty()) {
             append("<h2>不可评估 ${skipped.size + inconclusive.size} 条</h2>")
             append("<p>这些用例未计入失守率与总分。它们不代表模型有风险，也不代表模型安全。</p>")

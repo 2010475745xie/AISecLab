@@ -33,6 +33,7 @@ import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.report.ReportDiff
+import com.xieguojian.aiseclab.core.report.ReportSections
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.TestViewModel
 import java.io.File
@@ -86,26 +87,21 @@ fun ReportScreen(
         RiskLevel.UNKNOWN -> Color(0xFF8A8A8A)
     }
 
-    // "不可评估"= 调用失败（SKIPPED）+ 判定拿不准（INCONCLUSIVE）：两者都从分母里剔出，
+    // 四路分区与导出文档（Markdown / HTML 导出）共用同一份实现，见 core/report/ReportSections.kt。
+    // 这里只负责渲染 —— 分区判据抄三遍正是之前那个「needsReview 的 SKIPPED 会重复出现」缺口的根因。
+    // 口径：「不可评估」= 调用失败（SKIPPED）+ 判定拿不准（INCONCLUSIVE），两者都从分母里剔出；
     // 展示时必须跟"真的失守"分开说，也必须**彼此**分开说 —— 成因与修法完全不同
     //（一个是网络/限流，一个是三角色裁判没形成多数）。
-    val unassessedByDim = report.results
-        .filter { it.judgeResult.verdict == Verdict.SKIPPED || it.judgeResult.verdict == Verdict.INCONCLUSIVE }
-        .groupingBy { it.testCase.dimension }
-        .eachCount()
-    val skippedResults = report.results.filter { it.judgeResult.verdict == Verdict.SKIPPED }
-    val inconclusiveResults = report.results.filter { it.judgeResult.verdict == Verdict.INCONCLUSIVE }
-    // 待复核但**非失守、也非不可评估**：
-    //  · FAIL 已经在「失守明细」里逐条列过，不必重复；
-    //  · INCONCLUSIVE 一律 needsReview=true，它已经在下面「不可评估 · 判定拿不准」里列过，
-    //    这里若不排除，同一条用例会在界面上出现两遍，而且是两种不同样式的卡片
+    val sections = ReportSections.of(report)
+    val unassessedByDim = sections.unassessedByDim
+    val skippedResults = sections.skipped
+    val inconclusiveResults = sections.inconclusive
+    // 待人工复核：只列"判成 PASS、但证据链里仍有未消解分歧"的那批。
+    //  · FAIL 已经在「失守明细」里逐条列过；
+    //  · INCONCLUSIVE / SKIPPED 已经在下面「不可评估」两个区块里列过 ——
+    //    若不排除，同一条用例会在界面上出现两遍，而且是两种不同样式的卡片
     //    （FindingItem 有证据链、SkippedItem 只有票型），看起来像两条不同的问题。
-    // 剩下的就是"判成 PASS、但证据链里仍有未消解分歧"的那批 —— 这才是本区块该显示的。
-    val reviewOnly = report.results.filter {
-        it.judgeResult.needsReview &&
-            it.judgeResult.verdict != Verdict.FAIL &&
-            it.judgeResult.verdict != Verdict.INCONCLUSIVE
-    }
+    val reviewOnly = sections.reviewOnly
     val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
@@ -309,7 +305,7 @@ fun ReportScreen(
             Text("失守明细", style = MaterialTheme.typography.titleMedium)
         }
 
-        val fails = report.results.filter { it.judgeResult.verdict == Verdict.FAIL }
+        val fails = sections.fails
         if (fails.isEmpty()) {
             item {
                 Text(
