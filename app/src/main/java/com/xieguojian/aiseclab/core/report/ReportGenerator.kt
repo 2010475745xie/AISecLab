@@ -61,6 +61,33 @@ object ReportGenerator {
         }
         append("\n## 摘要\n\n${report.summary}\n\n")
 
+        // ── 安全指标（方案 §5）──
+        // 取数、取值格式、口径文案**全部来自 SafetyMetrics**：报告页 / Markdown / HTML
+        // 三处共用同一批字符串，不允许各自 format 一遍（那正是「界面 27%、导出 0.27」的来路）。
+        val erosion = ErosionAnalysis.of(report.results)
+        val metrics = SafetyMetrics.of(report.results, erosion)
+        if (metrics.evaluated + metrics.unassessed > 0) {
+            append("## 安全指标\n\n")
+            append("| 指标 | 值 | 口径 |\n|---|---|---|\n")
+            metrics.rows().forEach { m -> append("| ${m.label} | ${m.value} | ${m.hint} |\n") }
+            append("\n")
+            if (metrics.matrix.isNotEmpty()) {
+                append("### 策略 × 意图\n\n")
+                append("${ChartLegend.MATRIX}\n\n")
+                append("| 策略族 | " + metrics.matrixIntents.joinToString(" | ") { it.label } + " |\n")
+                append("|---" + "|---".repeat(metrics.matrixIntents.size) + "|\n")
+                metrics.matrixStrategies.forEach { st ->
+                    val byIntent = metrics.cellsOf(st).associateBy { it.intent }
+                    append("| ${st.label} | ")
+                    append(metrics.matrixIntents.joinToString(" | ") { i ->
+                        byIntent[i]?.asr?.let { "%.0f%%".format(it * 100) } ?: "--"
+                    })
+                    append(" |\n")
+                }
+                append("\n")
+            }
+        }
+
         // ── 基线对比章节（选了基线才有）──
         if (diff != null) {
             append("## 基线对比\n\n")
@@ -132,7 +159,6 @@ object ReportGenerator {
         // ── 多轮侵蚀：回答「第几步被磨破」──
         // 独立成章的理由同「攻击演进」：挂在失守明细里会在失守 0 条时整块消失，
         // 而"全程没被攻破"恰恰是最该看见的结论。取数只走 ErosionAnalysis（报告页同源）。
-        val erosion = ErosionAnalysis.of(report.results)
         if (erosion.multiStepTotal > 0) {
             append("## 多轮侵蚀\n\n")
             append("${ChartLegend.EROSION}\n\n")
@@ -280,6 +306,60 @@ object ReportGenerator {
 
         append("<h2>摘要</h2><p>${report.summary}</p>")
 
+        // ── 安全指标（方案 §5）：取数与文案同 Markdown 侧，全部来自 SafetyMetrics ──
+        val erosion = ErosionAnalysis.of(report.results)
+        val metrics = SafetyMetrics.of(report.results, erosion)
+        if (metrics.evaluated + metrics.unassessed > 0) {
+            append("<h2>安全指标</h2>")
+            append("<table style=\"width:100%;border-collapse:collapse;margin:8px 0\">")
+            append("<tr style=\"background:#f5f5f5\">")
+            listOf("指标", "值", "口径").forEach {
+                append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">")
+                    .append(escapeHtml(it)).append("</th>")
+            }
+            append("</tr>")
+            metrics.rows().forEach { m ->
+                append("<tr>")
+                listOf(m.label, m.value, m.hint).forEachIndexed { idx, txt ->
+                    val bold = if (idx == 1) "font-weight:600;" else ""
+                    append("<td style=\"padding:6px;border:1px solid #e5e5e5;$bold\">")
+                        .append(escapeHtml(txt)).append("</td>")
+                }
+                append("</tr>")
+            }
+            append("</table>")
+            if (metrics.matrix.isNotEmpty()) {
+                append("<h3>策略 × 意图</h3>")
+                append("<p class=\"meta\">").append(escapeHtml(ChartLegend.MATRIX)).append("</p>")
+                append("<div style=\"overflow-x:auto\"><table style=\"border-collapse:collapse;margin:8px 0\">")
+                append("<tr style=\"background:#f5f5f5\"><th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">策略族</th>")
+                metrics.matrixIntents.forEach {
+                    append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">")
+                        .append(escapeHtml(it.label)).append("</th>")
+                }
+                append("</tr>")
+                metrics.matrixStrategies.forEach { st ->
+                    val byIntent = metrics.cellsOf(st).associateBy { it.intent }
+                    append("<tr><td style=\"padding:6px;border:1px solid #e5e5e5\">")
+                        .append(escapeHtml(st.label)).append("</td>")
+                    metrics.matrixIntents.forEach { i ->
+                        val cell = byIntent[i]
+                        val txt = cell?.asr?.let { "%.0f%%".format(it * 100) } ?: "--"
+                        // 底色把 ASR 高低也画出来（导出件没有交互，纯数字表不好扫）。
+                        // 用 asrColor 而不是 colorFor：0% 是好事，得是绿的。
+                        val asr = cell?.asr
+                        val bg = asr?.let { ChartPalette.toHex(ChartPalette.asrColor(it)) }
+                        val fg = if (asr != null && ChartPalette.asrNeedsLightText(asr)) "color:#fff;" else ""
+                        val style = if (bg != null) "background:$bg;$fg" else ""
+                        append("<td style=\"padding:6px;border:1px solid #e5e5e5;$style\">")
+                            .append(escapeHtml(txt)).append("</td>")
+                    }
+                    append("</tr>")
+                }
+                append("</table></div>")
+            }
+        }
+
         // ── 图表：内联 SVG，不依赖 JS / CDN ──
         // 导出的报告要能在**没网、没脚本**的环境打开（审计存档、微信/邮件预览）。
         // 配色与图例都取自 core/report 里那一份，与报告页同源，不会走岔。
@@ -385,7 +465,6 @@ object ReportGenerator {
         }
 
         // ── 多轮侵蚀：独立章节，理由同 Markdown 侧 ──
-        val erosion = ErosionAnalysis.of(report.results)
         if (erosion.multiStepTotal > 0) {
             append("<h2>多轮侵蚀</h2>")
             append("<p class=\"meta\">").append(escapeHtml(ChartLegend.EROSION)).append("</p>")

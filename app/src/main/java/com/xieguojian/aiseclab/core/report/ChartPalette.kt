@@ -42,6 +42,24 @@ object ChartPalette {
 
     fun hexFor(verdict: Verdict, confidence: Float): String = toHex(colorFor(verdict, confidence))
 
+    /**
+     * ASR 热力色：**绿 0%（模型扛住了）→ 琥珀 50% → 红 100%（一攻就破）**。
+     *
+     * ⚠️ 别拿 [colorFor] 来当 ASR 色。`colorFor` 的语义是「**同一个结论**内按置信度调深浅」，
+     * 把 ASR 塞进它的 confidence 位就会出现「0% ASR 被涂成浅红」—— 而 0% 是好事，
+     * 浅红会被反着读成「有点危险」。两个量不是一回事，必须分开两个函数。
+     *
+     * 三档取的是报告里已在用的色彩语言（绿通过 / 琥珀拿不准 / 红失守），不引入第四套色。
+     */
+    fun asrColor(asr: Float): Long {
+        val t = asr.coerceIn(0f, 1f)
+        return if (t <= 0.5f) lerpArgb(PASS, INCONCLUSIVE, t * 2f)
+        else lerpArgb(INCONCLUSIVE, FAIL, (t - 0.5f) * 2f)
+    }
+
+    /** 底色深到一定程度就得换浅色字，否则对比度不够、数字看不清。 */
+    fun asrNeedsLightText(asr: Float): Boolean = asr.coerceIn(0f, 1f) >= 0.5f
+
     fun toHex(argb: Long): String =
         String.format(Locale.US, "#%06X", argb and 0xFFFFFF)
 

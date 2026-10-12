@@ -195,12 +195,25 @@ class ReportChartTest {
         // 而导出里是被 escape 的，所以两处都错、且只有肉眼能发现 —— 用断言钉住。
         listOf(
             ChartLegend.HEATMAP, ChartLegend.TIMELINE, ChartLegend.TIMELINE_EMPTY, ChartLegend.BARS,
-            ChartLegend.EROSION, ChartLegend.EROSION_EMPTY
+            ChartLegend.EROSION, ChartLegend.EROSION_EMPTY, ChartLegend.MATRIX
         )
             .forEach { s ->
                 assertFalse("图例里出现了 Markdown 粗体标记（真机会原样显示星号）：$s", s.contains("**"))
                 assertFalse("图例里出现了 Markdown 链接标记：$s", s.contains("]("))
             }
+    }
+
+    @Test
+    fun `ASR热力色不能用置信度色阶_0%必须是绿`() {
+        // 曾经直接复用 colorFor(verdict, confidence) 把 ASR 塞进"置信度"位，
+        // 结果 0% ASR（模型扛住了）被涂成浅红 —— 与「红=危险」的既定语义反着读。
+        // 两个量语义不同，必须两套函数；这条测试就是钉这一点。
+        assertEquals(ChartPalette.PASS, ChartPalette.asrColor(0f))
+        assertEquals(ChartPalette.INCONCLUSIVE, ChartPalette.asrColor(0.5f))
+        assertEquals(ChartPalette.FAIL, ChartPalette.asrColor(1f))
+        assertFalse("0% 是浅色底，用深色字", ChartPalette.asrNeedsLightText(0f))
+        assertTrue("100% 是深色底，得换浅色字", ChartPalette.asrNeedsLightText(1f))
+        assertTrue("矩阵图例必须点明与热力图深浅含义不同", ChartLegend.MATRIX.contains("置信度"))
     }
 
     @Test

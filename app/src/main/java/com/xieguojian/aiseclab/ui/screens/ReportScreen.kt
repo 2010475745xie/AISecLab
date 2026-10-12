@@ -39,6 +39,7 @@ import com.xieguojian.aiseclab.core.report.ChartLegend
 import com.xieguojian.aiseclab.core.report.ChartPalette
 import com.xieguojian.aiseclab.core.report.ErosionAnalysis
 import com.xieguojian.aiseclab.core.report.ErosionCurve
+import com.xieguojian.aiseclab.core.report.SafetyMetrics
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.chart.BarItem
 import com.xieguojian.aiseclab.ui.chart.ErosionTrack
@@ -50,6 +51,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * 报告页。[reportOverride] 为 null 时展示本轮测试的当前报告（可"重新测试"）；
@@ -72,6 +74,8 @@ fun ReportScreen(
     var exportedFile by remember { mutableStateOf<File?>(null) }
     // 是否展开"选基线"面板
     var showBaselinePicker by remember { mutableStateOf(false) }
+    // 策略×意图矩阵在手机上占屏较多（5 族 × 至多 8 个意图），默认收起
+    var showMatrix by remember { mutableStateOf(false) }
 
     if (report == null) {
         Column(Modifier.fillMaxSize().padding(20.dp)) {
@@ -127,6 +131,11 @@ fun ReportScreen(
     // 这里连 P50/P90 都不重算 —— 同一份数据三处各算一遍正是历史上走岔的方式。
     // ⚠️ 同样必须在 LazyColumn 外算。
     val erosion = remember(report) { ErosionAnalysis.of(report.results) }
+
+    // 安全指标（方案 §5）：破防步数**复用上面已算好的 erosion**，不在这里重算一遍。
+    // 取值格式与口径文案全部来自 SafetyMetrics.rows()，与两个导出件同源 ——
+    // 「界面说 27%、导出说 0.27」这类不一致只有肉眼能发现，所以不给它发生的机会。
+    val metrics = remember(report, erosion) { SafetyMetrics.of(report.results, erosion) }
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
@@ -198,6 +207,40 @@ fun ReportScreen(
             Text("摘要", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(6.dp))
             Text(report.summary, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        // ── 安全指标（方案 §5）：别再只报 ASR ──
+        // 放在摘要之后、图表之前：报告要先回答"到底多危险、哪一层先垮"，
+        // 再给逐条证据。取值与口径全部来自 SafetyMetrics，这里只负责排版。
+        if (metrics.evaluated + metrics.unassessed > 0) {
+            item {
+                Spacer(Modifier.height(20.dp))
+                Text("安全指标", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+            }
+            item { MetricsPanel(metrics) }
+            if (metrics.matrix.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text("策略 × 意图", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { showMatrix = !showMatrix }) {
+                            Text(if (showMatrix) "收起" else "展开")
+                        }
+                    }
+                    Text(
+                        ChartLegend.MATRIX,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (showMatrix) {
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        StrategyIntentMatrix(metrics)
+                    }
+                }
+            }
         }
 
         // ── 图表：用例矩阵 / 分区分布 / 判定层级 ──
@@ -624,6 +667,76 @@ private fun ErosionRow(c: ErosionCurve) {
 
 /** 分位数显示：null = 该族一条都没破防 → `--`（不能显示 0.0）。 */
 private fun oneDecimal(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
+
+/**
+ * 安全指标面板：一条指标一张小卡（名称 / 取值 / 口径）。
+ *
+ * 口径文案必须跟着显示 —— 这几个指标里有一半的坑都在"怎么算"上
+ * （一致性会奖励一律照做的模型、过度拒绝只是下界、失效层只归可观测的两层），
+ * 光给数字等于让读者按直觉误读。
+ */
+@Composable
+private fun MetricsPanel(metrics: SafetyMetrics) {
+    Column {
+        metrics.rows().forEach { m ->
+            Card(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Text(
+                            m.label,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(m.value, style = MaterialTheme.typography.titleMedium)
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        m.hint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 策略 × 意图矩阵。
+ *
+ * 手机上不做真网格：8 个意图的列头（「恶意代码/入侵」这种 7 字标签）在窄屏必然被截成省略号，
+ * 而**截断的标签在 `uiautomator dump` 里仍是完整的**，只有截图能发现（报告页踩过）。
+ * 改成一族一块、族内一行一个意图，条形长度 = 该意图下的 ASR（右侧数字即百分比）。
+ *
+ * ⚠️ 每族的条形在**族内**归一化 —— 跨族比长短没有意义，要比就看数字。
+ */
+@Composable
+private fun StrategyIntentMatrix(metrics: SafetyMetrics) {
+    Column {
+        metrics.matrixStrategies.forEach { st ->
+            Text(st.label, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            MiniBar(
+                metrics.cellsOf(st).map { c ->
+                    val asr = c.asr ?: 0f
+                    BarItem(
+                        c.intent.label,
+                        // 矩阵里的格都带可评估样本，asr 不会是 null；兜底成 0 只是为了类型
+                        (asr * 100).roundToInt(),
+                        // 颜色按 ASR 取，绿→红；不能一律涂红 —— 0% 是好事
+                        ChartPalette.asrColor(asr)
+                    )
+                }
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        Text(
+            "条形长度只在本族内归一化，跨族比长短没有意义；看右侧数字（ASR 百分比）。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
 
 /** 基线对比：总分/维度 delta 一览。 */
 @Composable
