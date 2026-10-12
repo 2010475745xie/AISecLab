@@ -1,0 +1,32 @@
+{
+  "models": [
+    {
+      "model_id": "mb-stub-0.5b-q4_k_m",
+      "weights_hash": "13daae908bfeaf91291d45689395bef50082bd0d7bb0eeda4514be653ba38058",
+      "quant": "q4_k_m",
+      "params_b": 0.5,
+      "min_ram_mb": 700,
+      "min_vram_mb": 0,
+      "node_tiers": [
+        "phone_low",
+        "phone_full",
+        "pc"
+      ],
+      "label": "桩模型 0.5B（无真实权重，仅供联调）",
+      "file_name": ""
+    },
+    {
+      "model_id": "mb-stub-7b-q4_k_m",
+      "weights_hash": "a90c294531126eb866ce43b850125fe4eee73196bdf61e7f49e6af2cb9dd10b3",
+      "quant": "q4_k_m",
+      "params_b": 7.0,
+      "min_ram_mb": 5000,
+      "min_vram_mb": 0,
+      "node_tiers": [
+        "pc"
+      ],
+      "label": "桩模型 7B（无真实权重，仅供联调）",
+      "file_name": ""
+    }
+  ]
+}

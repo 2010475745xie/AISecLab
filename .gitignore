@@ -40,3 +40,8 @@ Thumbs.db
 # 只把固化下来、需要复用的构建脚本纳入版本控制，其余一律不入库。
 _shot/*
 !_shot/*.py
+
+# ── 模块 B ──
+# var/ 是账本等运行时状态（本机所有，不该进版本库）；_test.log 是临时日志。
+module-b/var/
+module-b/_test.log
