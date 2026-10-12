@@ -44,9 +44,21 @@ class RuleJudge(
 
         // ── LLM 主判：配了裁判就全交它，规则降级为证据 ───────────────────────
         llmJudge?.let { llm ->
-            val ruleResult = rule?.let { adjudicate(testCase, it, levelOf(it)) }
+            // ⚠️ 参与仲裁的只能是 **hard**（达到 >=0.9 硬证据闸的确定性线索），**不能传 `rule`**。
+            // `rule` 可能是低置信线索 —— L3 的 CONTRADICTION(0.75) / FAKE_CITATION(0.7) /
+            // FORMAT_ERROR(0.8) 全都够不到 HIGH_CONFIDENCE，本来就被上面 `hard` 特意滤掉了。
+            // 传 `rule` 会让它们经 [arbitrate] 的分支②盖掉裁判的 INCONCLUSIVE 判成 FAIL，
+            // 把启发式噪音变成"失守"—— 正是上一轮修过的那类错误
+            // （"没测到 / 没判准"被渲染成"测出来很糟"）。
+            // [arbitrate] 的注释写的就是"规则有**确定性硬证据**、LLM 未达一致结论 → 以规则为准"，
+            // 代码必须与注释一致。
+            // 口径与后端 `judge.py::rule_layer` 对齐：它同样只认 `confidence >= 0.9` 的证据，
+            // 达不到就 `return llm`，不让规则出声。
+            // 注意 `rule` 仍要留给下面的 [ruleGate] —— 那是"压根没配裁判"的兜底档，
+            // 没有 LLM 可参考时低置信线索依然是有用的判据（后端不存在这一档，不构成两端差异）。
+            val ruleResult = hard?.let { adjudicate(testCase, it, levelOf(it)) }
             return try {
-                arbitrate(ruleResult, rule?.problem, llm.judge(testCase, response))
+                arbitrate(ruleResult, hard?.problem, llm.judge(testCase, response))
             } catch (e: Exception) {
                 // 裁判不可用（网络 / 解析失败）→ 降级到规则门控。
                 // 绝不因裁判报错把 PASS 翻成 FAIL（与后端护栏层同一原则）。
