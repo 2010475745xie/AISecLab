@@ -45,6 +45,18 @@ object ReportGenerator {
             val rate = if (d.total == 0) "--" else "%.0f%%".format(d.failRate * 100)
             append("| ${d.dimension.label} | $score | $ratio | $rate |\n")
         }
+        // 维度结论里的告警（失守用例、⚠️判定不稳定、ℹ️稳定性未测量）此前只躺在数据结构里，
+        // 界面与导出都没读，等于后端白算 —— 这里补上。
+        val notes = report.dimensions.values.sortedBy { it.dimension.ordinal }
+            .filter { it.notableFindings.isNotEmpty() }
+        if (notes.isNotEmpty()) {
+            append("\n### 维度结论\n\n")
+            notes.forEach { d ->
+                append("**${d.dimension.label}**\n\n")
+                d.notableFindings.forEach { append("- $it\n") }
+                append("\n")
+            }
+        }
         append("\n## 摘要\n\n${report.summary}\n\n")
 
         // ── 基线对比章节（选了基线才有）──
@@ -108,6 +120,9 @@ object ReportGenerator {
             append("- 模型回答：${r.response}\n")
             append("- 判定依据：${r.judgeResult.evidence.joinToString("；")}\n")
             if (r.judgeResult.needsReview) append("- 需人工复核\n")
+            if (r.stabilityMeasured && r.stability < 0.8f) {
+                append("- ⚠️ 判定不稳定：多次采样一致性仅 %.0f%%\n".format(r.stability * 100))
+            }
             if (r.judgeResult.disagreements.isNotEmpty()) append("- 分歧记录：${r.judgeResult.disagreements.joinToString("；")}\n")
             if (r.attackTrail.isNotEmpty()) {
                 append("- 攻击轨迹：\n")
@@ -116,14 +131,51 @@ object ReportGenerator {
             append("\n")
         }
 
+        // ── 待复核：判过但证据链里有未消解的分歧 ──
+        // 失守用例上面已经逐条列过了，这里只列"非失守、也非不可评估"的，避免同一条出现两遍。
+        // ⚠️ 必须同时排除 INCONCLUSIVE：它一律 needsReview=true，下面「不可评估」章节已经列过，
+        // 不排除就会在导出文档里重复出现。
+        val reviewOnly = report.results.filter {
+            it.judgeResult.needsReview &&
+                it.judgeResult.verdict != Verdict.FAIL &&
+                it.judgeResult.verdict != Verdict.INCONCLUSIVE
+        }
+        if (reviewOnly.isNotEmpty()) {
+            append("## 待人工复核 ${reviewOnly.size} 条\n\n")
+            append("这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，")
+            append("或三角色投票分裂）。**不影响总分**，但可靠性不如一致通过，值得扫一眼。\n\n")
+            reviewOnly.forEach { r ->
+                val stab = if (r.stabilityMeasured && r.stability < 0.8f) {
+                    "，采样一致性 %.0f%%".format(r.stability * 100)
+                } else ""
+                append("- ${r.testCase.dimension.label} · ${r.testCase.title}")
+                append("（${ReportDiff.verdictText(r.judgeResult.verdict)}$stab）\n")
+            }
+            append("\n")
+        }
+
+        // ── 不可评估：调用失败（SKIPPED）+ 判定拿不准（INCONCLUSIVE），两者都剔出分母 ──
+        // 必须分开列：成因完全不同（一个是网络/限流，一个是裁判没形成多数），
+        // 混在一起用户不知道该去查网络还是查模型。
         val skipped = report.results.filter { it.judgeResult.verdict == Verdict.SKIPPED }
-        if (skipped.isNotEmpty()) {
-            append("## 不可评估（接口调用失败 / 限流）\n\n")
-            append("共 ${skipped.size} 条未能拿到有效回答，已从失守率与总分中剔除。")
-            append("它们不代表模型有风险，也不代表模型安全。\n\n")
-            skipped.forEach { r ->
-                append("- ${r.testCase.dimension.label} · ${r.testCase.title}：")
-                append("${r.judgeResult.evidence.firstOrNull() ?: "接口调用失败"}\n")
+        val inconclusive = report.results.filter { it.judgeResult.verdict == Verdict.INCONCLUSIVE }
+        if (skipped.isNotEmpty() || inconclusive.isNotEmpty()) {
+            append("## 不可评估 ${skipped.size + inconclusive.size} 条\n\n")
+            append("这些用例未计入失守率与总分。它们不代表模型有风险，也不代表模型安全。\n\n")
+            if (skipped.isNotEmpty()) {
+                append("**调用失败 ${skipped.size} 条**（接口异常/限流/超时，与模型安全性无关）：\n\n")
+                skipped.forEach { r ->
+                    append("- ${r.testCase.dimension.label} · ${r.testCase.title}：")
+                    append("${r.judgeResult.evidence.firstOrNull() ?: "接口调用失败"}\n")
+                }
+                append("\n")
+            }
+            if (inconclusive.isNotEmpty()) {
+                append("**判定拿不准 ${inconclusive.size} 条**（三角色裁判未形成多数结论）：\n\n")
+                inconclusive.forEach { r ->
+                    append("- ${r.testCase.dimension.label} · ${r.testCase.title}：")
+                    append("${r.judgeResult.disagreements.joinToString("；").ifBlank { "裁判未达成一致" }}\n")
+                }
             }
         }
     }
@@ -163,13 +215,25 @@ object ReportGenerator {
         report.dimensions.values.sortedBy { it.dimension.ordinal }.forEach { d ->
             val c = if (d.total == 0) "#8A8A8A" else if (d.score >= 80) "#1D9E75" else if (d.score >= 60) "#BA7517" else "#E24B4B"
             val s = if (d.total == 0) "--" else "%.1f".format(d.score)
-            val sub = if (d.total == 0) "未评估（全部调用失败）"
+            val sub = if (d.total == 0) "未评估（全部不可评估）"
             else "${d.passed}/${d.total} 通过 · 失守 ${"%.0f%%".format(d.failRate * 100)}"
             append("<div class=\"card\"><div class=\"d\">${d.dimension.label}</div>")
             append("<div class=\"s\" style=\"color:$c\">$s</div>")
             append("<div class=\"d\">$sub</div></div>")
         }
         append("</div>")
+
+        // 维度结论告警（失守用例 / ⚠️判定不稳定 / ℹ️稳定性未测量）—— 与 markdown 导出同源。
+        val notes = report.dimensions.values.sortedBy { it.dimension.ordinal }
+            .filter { it.notableFindings.isNotEmpty() }
+        if (notes.isNotEmpty()) {
+            append("<h2>维度结论</h2>")
+            notes.forEach { d ->
+                append("<b>${d.dimension.label}</b><ul>")
+                d.notableFindings.forEach { append("<li>${escapeHtml(it)}</li>") }
+                append("</ul>")
+            }
+        }
 
         append("<h2>摘要</h2><p>${report.summary}</p>")
 
@@ -240,6 +304,9 @@ object ReportGenerator {
             append("模型回答：<pre>${escapeHtml(r.response)}</pre>")
             append("判定依据：${r.judgeResult.evidence.joinToString("；")}")
             if (r.judgeResult.needsReview) append("<br><b style=\"color:#D85A30\">需人工复核</b>")
+            if (r.stabilityMeasured && r.stability < 0.8f) {
+                append("<br><b style=\"color:#D85A30\">⚠️ 判定不稳定：多次采样一致性仅 %.0f%%</b>".format(r.stability * 100))
+            }
             if (r.judgeResult.disagreements.isNotEmpty()) append("<br>分歧记录：${r.judgeResult.disagreements.joinToString("；")}")
             if (r.attackTrail.isNotEmpty()) {
                 append("<br>攻击轨迹：<pre>${escapeHtml(r.attackTrail.joinToString("\n"))}</pre>")
@@ -247,14 +314,47 @@ object ReportGenerator {
             append("</div>")
         }
 
+        // ── 待复核：判过但证据链里有未消解的分歧（非失守、非不可评估的那部分）──
+        val reviewOnly = report.results.filter {
+            it.judgeResult.needsReview &&
+                it.judgeResult.verdict != Verdict.FAIL &&
+                it.judgeResult.verdict != Verdict.INCONCLUSIVE
+        }
+        if (reviewOnly.isNotEmpty()) {
+            append("<h2>待人工复核 ${reviewOnly.size} 条</h2>")
+            append("<p>这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，")
+            append("或三角色投票分裂）。<b>不影响总分</b>，但可靠性不如一致通过，值得扫一眼。</p><ul>")
+            reviewOnly.forEach { r ->
+                val stab = if (r.stabilityMeasured && r.stability < 0.8f) {
+                    "，采样一致性 ${"%.0f%%".format(r.stability * 100)}"
+                } else ""
+                append("<li>[${r.testCase.dimension.label}] ${escapeHtml(r.testCase.title)}")
+                append("（${ReportDiff.verdictText(r.judgeResult.verdict)}$stab）</li>")
+            }
+            append("</ul>")
+        }
+
+        // ── 不可评估：调用失败 + 判定拿不准，分开列（成因不同，修法也不同）──
         val skipped = report.results.filter { it.judgeResult.verdict == Verdict.SKIPPED }
-        if (skipped.isNotEmpty()) {
-            append("<h2>不可评估（接口调用失败 / 限流）</h2>")
-            append("<p>共 ${skipped.size} 条未能拿到有效回答，已从失守率与总分中剔除。")
-            append("它们不代表模型有风险，也不代表模型安全。</p>")
-            skipped.forEach { r ->
-                append("<div class=\"skipped\"><b>${r.testCase.dimension.label} · ${r.testCase.title}</b><br>")
-                append("${escapeHtml(r.judgeResult.evidence.firstOrNull() ?: "接口调用失败")}</div>")
+        val inconclusive = report.results.filter { it.judgeResult.verdict == Verdict.INCONCLUSIVE }
+        if (skipped.isNotEmpty() || inconclusive.isNotEmpty()) {
+            append("<h2>不可评估 ${skipped.size + inconclusive.size} 条</h2>")
+            append("<p>这些用例未计入失守率与总分。它们不代表模型有风险，也不代表模型安全。</p>")
+            if (skipped.isNotEmpty()) {
+                append("<h3>调用失败 ${skipped.size} 条</h3>")
+                append("<p>接口异常/限流/超时，与模型安全性无关。</p>")
+                skipped.forEach { r ->
+                    append("<div class=\"skipped\"><b>${r.testCase.dimension.label} · ${r.testCase.title}</b><br>")
+                    append("${escapeHtml(r.judgeResult.evidence.firstOrNull() ?: "接口调用失败")}</div>")
+                }
+            }
+            if (inconclusive.isNotEmpty()) {
+                append("<h3>判定拿不准 ${inconclusive.size} 条</h3>")
+                append("<p>三角色裁判未形成多数结论。</p>")
+                inconclusive.forEach { r ->
+                    append("<div class=\"skipped\"><b>${r.testCase.dimension.label} · ${r.testCase.title}</b><br>")
+                    append("${escapeHtml(r.judgeResult.disagreements.joinToString("；").ifBlank { "裁判未达成一致" })}</div>")
+                }
             }
         }
         append("</body></html>")

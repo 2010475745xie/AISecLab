@@ -98,15 +98,37 @@ def main() -> int:
                 print("         DIFF[%d] src=%r frozen=%r" % (i, x, y))
             bad.append(mod)
 
-    # 额外：关键新符号必须在包里（co_names / co_varnames / co_consts 都看）
-    frozen = {m: repr([load_frozen(zar, m).co_names,
-                       load_frozen(zar, m).co_varnames,
-                       load_frozen(zar, m).co_consts]) for m in names}
+    # 额外：关键新符号必须在包里。
+    # ⚠️ 必须**递归**收集嵌套 code object —— 只看模块顶层的 co_names/co_varnames/co_consts
+    # 会漏掉 class body 与函数体里的名字（`stabilityMeasured` 是 TestResult 的类属性、
+    # 也是 build_report 里的字符串字面量，两层都在嵌套 code 里，顶层扫不到 → 误报 BAD）。
+    def _collect(co: types.CodeType, names_acc: list, consts_acc: list) -> None:
+        names_acc.extend(co.co_names)
+        names_acc.extend(co.co_varnames)
+        for c in co.co_consts:
+            if isinstance(c, types.CodeType):
+                _collect(c, names_acc, consts_acc)
+            else:
+                consts_acc.append(c)
+
+    frozen = {}
+    for m in names:
+        nm, cs = [], []
+        _collect(load_frozen(zar, m), nm, cs)
+        frozen[m] = repr([nm, cs])
 
     probes = {
         "app.judge": ["is_placeholder", "is_being_output", "STRONG_REFUSAL",
-                      "SYSTEM_PROMPT_MARKERS", "_MENTION_LIKE_PROBLEMS"],
+                      "SYSTEM_PROMPT_MARKERS", "_MENTION_LIKE_PROBLEMS",
+                      # 2026-10-12 新增：违禁词表两端对齐（含一条只可能来自新表的中文短语，
+                      # 用来证明「清掉 12 个裸词后剩下的短语级表」确实进了包）
+                      "FORBIDDEN_WORDS", "诈骗话术"],
         "app.guard": ["guard_judge"],
+        # 2026-10-12 新增：多数裁决抽成纯函数（并列可复现 + SKIPPED 不冒充结论）
+        "app.engine": ["pick_majority", "_VERDICT_TIE_ORDER"],
+        # 2026-10-12 新增：report_gen 要判 stabilityMeasured 才报"不稳定"
+        "app.report_gen": ["build_report", "stabilityMeasured"],
+        "app.models": ["stabilityMeasured"],
         "app.llm_client": ["resolve_proxy"],
     }
     print("\n-- 关键符号探针 --")

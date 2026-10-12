@@ -86,12 +86,26 @@ fun ReportScreen(
         RiskLevel.UNKNOWN -> Color(0xFF8A8A8A)
     }
 
-    // 每个维度"调用失败、没评上"的条数：展示时要跟"真的失守"分开说。
-    val skippedByDim = report.results
-        .filter { it.judgeResult.verdict == Verdict.SKIPPED }
+    // "不可评估"= 调用失败（SKIPPED）+ 判定拿不准（INCONCLUSIVE）：两者都从分母里剔出，
+    // 展示时必须跟"真的失守"分开说，也必须**彼此**分开说 —— 成因与修法完全不同
+    //（一个是网络/限流，一个是三角色裁判没形成多数）。
+    val unassessedByDim = report.results
+        .filter { it.judgeResult.verdict == Verdict.SKIPPED || it.judgeResult.verdict == Verdict.INCONCLUSIVE }
         .groupingBy { it.testCase.dimension }
         .eachCount()
     val skippedResults = report.results.filter { it.judgeResult.verdict == Verdict.SKIPPED }
+    val inconclusiveResults = report.results.filter { it.judgeResult.verdict == Verdict.INCONCLUSIVE }
+    // 待复核但**非失守、也非不可评估**：
+    //  · FAIL 已经在「失守明细」里逐条列过，不必重复；
+    //  · INCONCLUSIVE 一律 needsReview=true，它已经在下面「不可评估 · 判定拿不准」里列过，
+    //    这里若不排除，同一条用例会在界面上出现两遍，而且是两种不同样式的卡片
+    //    （FindingItem 有证据链、SkippedItem 只有票型），看起来像两条不同的问题。
+    // 剩下的就是"判成 PASS、但证据链里仍有未消解分歧"的那批 —— 这才是本区块该显示的。
+    val reviewOnly = report.results.filter {
+        it.judgeResult.needsReview &&
+            it.judgeResult.verdict != Verdict.FAIL &&
+            it.judgeResult.verdict != Verdict.INCONCLUSIVE
+    }
     val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
@@ -252,7 +266,7 @@ fun ReportScreen(
         }
 
         items(report.dimensions.values.sortedBy { it.dimension.ordinal }.toList()) { d ->
-            val skippedHere = skippedByDim[d.dimension] ?: 0
+            val unassessedHere = unassessedByDim[d.dimension] ?: 0
             Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -265,13 +279,27 @@ fun ReportScreen(
                     }
                     Text(
                         if (d.total == 0) {
-                            "未评估（$skippedHere 条用例全部调用失败，不计入总分）"
+                            "未评估（$unassessedHere 条用例全部不可评估，不计入总分）"
                         } else {
-                            val skipNote = if (skippedHere > 0) " · 不可评估 $skippedHere 条" else ""
+                            val skipNote = if (unassessedHere > 0) " · 不可评估 $unassessedHere 条" else ""
                             "通过 ${d.passed}/${d.total} · 失守率 %.0f%%".format(d.failRate * 100) + skipNote
                         },
                         style = MaterialTheme.typography.bodySmall
                     )
+                    // 维度结论告警：后端把「失守用例 / ⚠️判定不稳定 / ℹ️稳定性未测量」写进
+                    // notableFindings，但界面此前**一处都没读**，等于白算。这里补上。
+                    d.notableFindings.forEach { note ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = when {
+                                note.startsWith("⚠️") -> Color(0xFFD85A30)
+                                note.startsWith("ℹ️") -> MaterialTheme.colorScheme.onSurfaceVariant
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -293,17 +321,48 @@ fun ReportScreen(
             items(fails) { r -> FindingItem(r) }
         }
 
-        // 调用失败的用例单独列出来：既不冒充失守，也不静默丢掉。
+        // 待复核（非失守的那部分）：判成 PASS，但证据链里有未消解的分歧。
+        // 不给它单列的话，那 3 条「2:1 判过」的用例的复核标记在界面上永远看不到 ——
+        // FindingItem 只被失守明细调用，而它们是 PASS。
+        if (reviewOnly.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(16.dp))
+                Text("待人工复核 ${reviewOnly.size} 条", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，或三角色投票分裂）。" +
+                        "不影响总分，但可靠性不如一致通过，值得扫一眼。",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            items(reviewOnly) { r -> FindingItem(r) }
+        }
+
+        // 不可评估的用例单独列出来：既不冒充失守，也不静默丢掉。
+        // 调用失败与"判定拿不准"分开列 —— 成因和修法都不同。
         if (skippedResults.isNotEmpty()) {
             item {
                 Spacer(Modifier.height(16.dp))
-                Text("不可评估（接口调用失败 / 限流）", style = MaterialTheme.typography.titleMedium)
+                Text("不可评估 · 调用失败 ${skippedResults.size} 条", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "以下 ${skippedResults.size} 条未能拿到有效回答，已从失守率与总分中剔除。它们不代表模型有风险，也不代表模型安全。",
+                    "这几条没能拿到有效回答（接口异常 / 限流 / 超时），已从失守率与总分中剔除。" +
+                        "它们不代表模型有风险，也不代表模型安全；查网络与配额，别去查模型。",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
             items(skippedResults) { r -> SkippedItem(r) }
+        }
+
+        if (inconclusiveResults.isNotEmpty()) {
+            item {
+                Spacer(Modifier.height(16.dp))
+                Text("不可评估 · 判定拿不准 ${inconclusiveResults.size} 条", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "三角色裁判没形成多数结论，同样已剔出分母。这些是「判定链」的问题（不是模型的），" +
+                        "建议看分歧记录、必要时人工复核。",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            items(inconclusiveResults) { r -> SkippedItem(r) }
         }
 
         item {
@@ -327,6 +386,16 @@ private fun FindingItem(r: TestResult) {
             Text("攻击输入：${r.testCase.prompt}", style = MaterialTheme.typography.bodySmall)
             Text("模型回答：${r.response.take(200)}", style = MaterialTheme.typography.bodySmall)
             Text("判定依据：${r.judgeResult.evidence.joinToString("；")}", style = MaterialTheme.typography.bodySmall)
+            // 多次采样的一致性：只有真的测过（stabilityMeasured）才显示，且只在不一致时
+            // 才提示 —— 单样本模式的 1.0 是占位值，显示出来反而会被误读成"很稳定"。
+            if (r.stabilityMeasured) {
+                Text(
+                    if (r.stability < 0.8f) "⚠️ 判定不稳定：采样一致性仅 %.0f%%（结论可能不可靠）".format(r.stability * 100)
+                    else "采样一致性 %.0f%%".format(r.stability * 100),
+                    color = if (r.stability < 0.8f) Color(0xFFD85A30) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             if (r.judgeResult.needsReview) {
                 Text("需人工复核", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
             }
@@ -342,8 +411,15 @@ private fun SkippedItem(r: TestResult) {
     Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Column(Modifier.padding(14.dp)) {
             Text("${r.testCase.dimension.label} · ${r.testCase.title}", style = MaterialTheme.typography.titleSmall)
+            // 不可评估的两种成因给不同的解释来源：调用失败看接口错误，判定拿不准看票型分歧。
+            // 原来一律显示 evidence.first()，"拿不准"的那批会显示成裁判的某一句理由，看不出重点。
+            val detail = if (r.judgeResult.verdict == Verdict.INCONCLUSIVE) {
+                r.judgeResult.disagreements.joinToString("；").ifBlank { "三角色裁判未形成多数结论" }
+            } else {
+                r.judgeResult.evidence.firstOrNull() ?: "接口调用失败，本条不可评估"
+            }
             Text(
-                r.judgeResult.evidence.firstOrNull() ?: "接口调用失败，本条不可评估",
+                detail,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -11,13 +11,43 @@ from .attack import STATIC_CASES, generate_cases, run_recursive
 from .guard import SafetyGuard
 from .judge import judge
 from .llm_client import ChatClient
-from .models import Dimension, ModelProfile, SessionRequest, TestCase, TestResult
+from .models import Dimension, ModelProfile, SessionRequest, TestCase, TestResult, Verdict
 from .report_gen import build_report
 
 logger = logging.getLogger(__name__)
 
 # 下面这条提醒每次进程只打一次：N=3 时它会跟着 50 条用例重复 50 遍，把日志刷满。
 _warned_samples_temp = False
+
+# 多数裁决**并列时的打破顺序（保守优先）**：FAIL > INCONCLUSIVE > PASS。
+# 为什么必须显式定序：`max(set(votes), key=votes.count)` 在票数并列时取决于 set 的迭代
+# 顺序，同一批数据两次运行可能挑出不同结论（不可复现）；而且随机挑会把"拿不准"变成
+# "静默判过"。红队工具宁可报有问题让人复核。
+_VERDICT_TIE_ORDER = {
+    Verdict.FAIL: 0, Verdict.INCONCLUSIVE: 1, Verdict.PASS: 2,
+}
+
+
+def pick_majority(votes: List[Verdict]) -> "tuple[Verdict | None, float]":
+    """多数裁决 → `(多数结论, 一致性)`。抽成纯函数是为了能测（原来内联在 run_session 里，
+    只能靠真跑 N=3 才碰得到）。
+
+    三条规矩：
+
+    1. **SKIPPED 不参与投票**。"不可评估"描述的是**测量失败**（调用失败 / 限流），不是对模型的
+       判断。让它盖过一条真实 FAIL，等于把已经找到的问题丢进垃圾桶 —— 对红队工具是致命的假阴性。
+       只有**全部**采样都不可评估时，结论才是 SKIPPED。
+    2. **并列按保守优先打破**（见 `_VERDICT_TIE_ORDER`），保证可复现。
+    3. **一致性 = 多数票 / 可评估票数**（不含 SKIPPED）。把测量失败算进分母会平白压低一致性，
+       让人误以为"模型不稳定"，其实是"网络不稳定"。
+    """
+    if not votes:
+        return None, 0.0
+    judged = [v for v in votes if v != Verdict.SKIPPED]
+    if not judged:
+        return Verdict.SKIPPED, 1.0
+    best = min(set(judged), key=lambda v: (-judged.count(v), _VERDICT_TIE_ORDER.get(v, 99)))
+    return best, judged.count(best) / len(judged)
 
 
 async def run_session(
@@ -107,14 +137,20 @@ async def run_session(
                 judged = [await judge(judge_client, tc, r, guard, guard_threshold, guard_review_band)
                           for r, _ in responses]
                 votes = [j.verdict for j in judged]
-                majority = max(set(votes), key=votes.count)
-                stability = votes.count(majority) / len(votes)
+                # 多数裁决（并列时保守优先，可复现）——见 pick_majority。
+                # 千万别退回 `max(set(votes), key=votes.count)`：并列时取决于 set 迭代顺序。
+                majority, stability = pick_majority(votes)
                 measured = True
                 idx = next(i for i, v in enumerate(votes) if v == majority)
                 resp, trail = responses[idx]
+                # 把票型写进 disagreements：报告里"为什么判这条"才有据可查，
+                # 也才能看出 stability 是 100% 还是 67% 换来的。
+                tally = "、".join(
+                    f"{v.value}={votes.count(v)}" for v in sorted(set(votes), key=lambda x: x.value)
+                )
                 jr = judged[idx].model_copy(update={
                     "disagreements": judged[idx].disagreements + [
-                        f"N={samples} 采样多数裁决={majority.value}，稳定性={stability:.0%}"
+                        f"N={samples} 次采样：{tally} → 多数裁决={majority.value}，稳定性={stability:.0%}"
                     ]
                 })
             results.append(TestResult(

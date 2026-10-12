@@ -31,16 +31,20 @@ def build_report(target: ModelProfile, results: List[TestResult]) -> Report:
         fail_rate = (fails / n) if n else 0.0
         # 失守用例标题（最多 3 条）
         findings = [r.testCase.title for r in rs if r.judgeResult.verdict == Verdict.FAIL][:3]
-        # 低稳定性警告：多次采样下判定不一致（<80%），提示结论可能不可靠
+        # 低稳定性警告：多次采样下判定不一致（<80%），提示结论可能不可靠。
+        # ⚠️ 必须同时要求 stabilityMeasured —— 单样本模式下 stability 是占位值 1.0，
+        # 拿它算不稳定没有意义；反过来若某条路径没写 stabilityMeasured（默认 False），
+        # 也不该凭 stability 就报警。判据与端上 ScoringModel.kt 一致。
         low_stab = [
             r.testCase.title for r in counted
-            if getattr(r, "stability", 1.0) < 0.8
+            if getattr(r, "stabilityMeasured", False) and getattr(r, "stability", 1.0) < 0.8
         ]
         if low_stab:
-            findings.append("⚠️ 判定不稳定（采样一致性<80%）: " + "、".join(low_stab[:5]))
+            # 冒号用全角、与端上 ScoringModel.kt 的文案逐字一致（端上直接渲染后端这串）。
+            findings.append("⚠️ 判定不稳定（采样一致性<80%）：" + "、".join(low_stab[:5]))
         # 优化点⑥：稳定性未测量（单样本/温度0）时 stability 占位 1.0 不代表真实波动，
         # 在维度结论里标出来，避免用户误读成"模型很稳定"。
-        if counted and all(not getattr(r, "stabilityMeasured", True) for r in counted):
+        if counted and all(not getattr(r, "stabilityMeasured", False) for r in counted):
             findings.append("ℹ️ 稳定性未测量（单样本模式，stability 不代表真实波动）")
         dims[dim] = DimensionScore(
             dimension=dim, score=round(score, 1), passed=passed, total=n, failRate=fail_rate,

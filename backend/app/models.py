@@ -75,7 +75,10 @@ class TestResult(BaseModel):
     latencyMs: int = 0
     attackTrail: List[str] = []
     stability: float = 1.0     # 多次采样一致性（默认 1.0，单样本恒为 1.0）
-    stabilityMeasured: bool = True  # False=单样本/温度0，stability 是占位值、不代表真实波动（优化点⑥）
+    # False=单样本/温度0，stability 是占位值、不代表真实波动（优化点⑥）。
+    # ⚠️ 默认必须是 **False**：与端上 `TestResult.stabilityMeasured: Boolean = false` 同义
+    # —— "没测过"不许默认成"测过了"，否则未来任何忘了赋值的新调用点都会被当成测过。
+    stabilityMeasured: bool = False
 
 
 class DimensionScore(BaseModel):
