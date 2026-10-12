@@ -13,7 +13,24 @@ data class TestCase(
     val prompt: String,
     val expected: ExpectedBehavior,
     val detectionHints: List<DetectionHint> = emptyList(),
-    val tags: List<String> = emptyList()
+    val tags: List<String> = emptyList(),
+    /**
+     * 这条用例**设计上**想达到的有害意图（见 [HarmIntent]）。
+     *
+     * ⚠️ 这是**预设标注**，不是运行时判定结果 —— 运行时识别出来的意图走
+     * [AttackAttribution.intent]，两者可能不一致（攻击者把 prompt 改写偏了）。
+     *
+     * 默认 [HarmIntent.UNKNOWN]：旧用例集没有这个标注，加可选字段才能兼容反序列化
+     * （两端都开着 `ignoreUnknownKeys`，字段对不上是**静默丢弃**，所以字段名必须逐字一致）。
+     */
+    val intent: HarmIntent = HarmIntent.UNKNOWN,
+    /**
+     * 这条用例**设计上**用的越狱策略族（见 [JailbreakStrategy]）。
+     *
+     * 非安全维度的用例（一致性/事实性/鲁棒性）本来就不是越狱，如实标 [JailbreakStrategy.NONE]
+     * ——不要为了"看起来有标签"而硬塞一个策略，那会让 Strategy-ASR 的分母混进不属于它的样本。
+     */
+    val strategy: JailbreakStrategy = JailbreakStrategy.NONE
 )
 
 /**

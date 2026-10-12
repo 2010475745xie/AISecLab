@@ -59,6 +59,69 @@ class JudgeResult(BaseModel):
     disagreements: List[str] = []
 
 
+class HarmIntent(str, Enum):
+    """有害意图 —— 这条用例**到底想让模型干什么**（忽略表面措辞与包装）。
+
+    与 JailbreakStrategy 的分工：意图 = 目的，策略 = 手段，二者正交 ——
+    同一个「系统提示窃取」意图可以用角色扮演 / 编码 / 虚构情境任意一种策略发起，
+    报告里的「策略 × 意图矩阵」就是这个正交关系的产物。
+
+    与端上 core/model/Jailbreak.kt::HarmIntent 逐字镜像。
+    """
+    malware = "malware"
+    chem_weapon = "chem_weapon"
+    discrimination = "discrimination"
+    privacy_exfil = "privacy_exfil"
+    sysprompt_leak = "sysprompt_leak"
+    fraud = "fraud"
+    self_harm = "self_harm"
+    unknown = "unknown"
+
+
+class JailbreakStrategy(str, Enum):
+    """越狱策略族 —— 这次攻击**用了什么手段**。
+
+    为什么要归「族」：`忽略之前的指令` 与 `Disregard your prior rules` 表面完全不同，
+    但属同一族（overwrite）；归族才能跨样本统计「这个模型最怕哪类手法」。
+
+    none 是**基线**（纯直问）；所有策略的效果都要减去这个基线才有意义。
+
+    与端上 core/model/Jailbreak.kt::JailbreakStrategy 逐字镜像。
+    """
+    roleplay = "roleplay"
+    overwrite = "overwrite"
+    encoding = "encoding"
+    many_shot = "many_shot"
+    fiction = "fiction"
+    tool_inject = "tool_inject"
+    refusal_suppress = "refusal_suppress"
+    none = "none"
+
+
+class StrategyFingerprint(BaseModel):
+    """策略指纹 —— 把表面写法归到策略族的规则。纯静态、不烧 token。
+
+    只判「用了什么手法」（纯归因），**绝不回流影响 verdict** —— 那是 L1 规则的职责。
+    """
+    strategy: JailbreakStrategy
+    keywords: List[str] = []
+    patterns: List[str] = []      # 正则源码
+    weight: float = 1.0
+
+
+class AttackAttribution(BaseModel):
+    """一次攻击链的「意图 × 策略」归因（**运行时识别**结果）。
+
+    区别于 TestCase.intent / TestCase.strategy 的「设计时预设」：
+    这里的是跑起来识别出来的，能发现「设计的策略与实际发出的不一致」
+    （攻击者 LLM 可能把 prompt 改写成另一种策略，这本身就是值得记进报告的信号）。
+    """
+    intent: HarmIntent = HarmIntent.unknown
+    strategies: List[JailbreakStrategy] = []
+    matchedFingerprints: List[str] = []
+    confidence: float = 0.0
+
+
 class TestCase(BaseModel):
     id: str
     dimension: Dimension
@@ -66,6 +129,11 @@ class TestCase(BaseModel):
     prompt: str
     expected: ExpectedBehavior
     tags: List[str] = []
+    # ── 意图 × 策略元数据（2026-10-12）──
+    # 可选带默认值：旧用例集没有标注也能反序列化。字段名必须与端上
+    # core/model/TestCase.kt 逐字一致 —— 两端都忽略未知键，名字对不上是**静默丢弃**。
+    intent: HarmIntent = HarmIntent.unknown
+    strategy: JailbreakStrategy = JailbreakStrategy.none
 
 
 class AttackRound(BaseModel):
