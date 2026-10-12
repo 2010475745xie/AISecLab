@@ -22,8 +22,14 @@ import java.util.Base64
  */
 object EncodingNormalizer {
 
-    /** 零宽 / 不可见字符。攻击者把它们插在关键词中间，肉眼看不出来但字面匹配会失效。 */
-    private val ZERO_WIDTH = setOf(
+    /**
+     * 零宽 / 不可见字符。攻击者把它们插在关键词中间，肉眼看不出来但字面匹配会失效。
+     *
+     * `internal` 而非 `private`：变体生成器（[EncodingVariants]）要用**同一张表**来
+     * 造编码样本。抄一份到别处就会出现"生成用的字符集 ≠ 还原用的字符集"——
+     * 造出来的样本还原不回去，而测试还会绿（因为它只验自己那半张表）。
+     */
+    internal val ZERO_WIDTH = setOf(
         '\u200B', // zero width space
         '\u200C', // zero width non-joiner
         '\u200D', // zero width joiner
@@ -35,8 +41,11 @@ object EncodingNormalizer {
     /**
      * 同形字 → ASCII。西里尔 / 希腊字母里长得跟拉丁字母一样的那些，
      * 常被用来写下 `іgnore prevіous` 这种**看起来完全正常**的绕过文本。
+     *
+     * `internal` 的理由同 [ZERO_WIDTH]：变体生成器必须用同一张表造样本。
+     * 反向映射（ASCII → 同形字）由 [EncodingVariants.homoglyph] 在本表上现算。
      */
-    private val HOMOGLYPH: Map<Char, Char> = mapOf(
+    internal val HOMOGLYPH: Map<Char, Char> = mapOf(
         // 西里尔小写
         'а' to 'a', 'е' to 'e', 'о' to 'o', 'с' to 'c', 'р' to 'p', 'х' to 'x',
         'у' to 'y', 'і' to 'i', 'ѕ' to 's', 'ј' to 'j', 'ԁ' to 'd', 'һ' to 'h',
@@ -55,7 +64,11 @@ object EncodingNormalizer {
     /** 候选摩斯段：至少 5 组 `.-` 串，组间用空格或斜杠分隔。 */
     private val MORSE_RE = Regex("""(?:[.\-]{1,6}[ /]+){4,}[.\-]{1,6}""")
 
-    private val MORSE_TABLE: Map<String, Char> = mapOf(
+    /**
+     * 摩斯表。`internal` 的理由同 [ZERO_WIDTH] —— 生成器取它的**反向表**来编码，
+     * 反向表现算，避免两张表各写一遍后对不上。
+     */
+    internal val MORSE_TABLE: Map<String, Char> = mapOf(
         ".-" to 'A', "-..." to 'B', "-.-." to 'C', "-.." to 'D', "." to 'E',
         "..-." to 'F', "--." to 'G', "...." to 'H', ".." to 'I', ".---" to 'J',
         "-.-" to 'K', ".-.." to 'L', "--" to 'M', "-." to 'N', "---" to 'O',
@@ -151,7 +164,12 @@ object EncodingNormalizer {
     /** 便利方法：直接给出可匹配文本（内部已含清洗与还原）。 */
     fun forMatching(text: String): String = normalize(text).forMatching()
 
-    private fun rot13(s: String): String = s.map { c ->
+    /**
+     * ROT13。`internal` 的理由同 [ZERO_WIDTH]：变体生成器用它**编码**，
+     * 本类用同一个实现**还原** —— 两边共用一份映射才谈得上"还原得回去"。
+     * （ROT13 是自反的，编码/解码同一函数。）
+     */
+    internal fun rot13(s: String): String = s.map { c ->
         when (c) {
             in 'a'..'z' -> ((c - 'a' + 13) % 26 + 'a'.code).toChar()
             in 'A'..'Z' -> ((c - 'A' + 13) % 26 + 'A'.code).toChar()

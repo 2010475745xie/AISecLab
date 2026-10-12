@@ -350,3 +350,69 @@ def normalize(text: str) -> NormalizationResult:
 
 def for_matching(text: str) -> str:
     return normalize(text).for_matching()
+
+
+# ────────────────────────────────────────────────────────────────────
+# 编码**生成器** —— normalize/clean 的反向操作，**只用于造越狱变体样本**。
+#
+# 为什么由代码生成而不是手写几段编码文本：1.2 的验收标准是「编码型越狱在还原后
+# 可被命中」，要证明这条，样本必须是**这套还原器真的还原得回去**的编码。
+# 手写样本极易写成"形式像、还原器其实不认"（换个字符集、少个分隔符就废），
+# 而测试照样绿 —— 因为它验的是自己写的那段文本。
+# 生成器直接引用还原器的表，"编得出来"与"还原得回去"由同一份数据保证。
+#
+# ⚠️ 本组函数**不进判定链路**：线上还原永远走 normalize()，这里只造输入样本。
+# 与端上 core/jailbreak/EncodingVariants.kt 逐字同构（同一套表、同一分隔符）。
+# ────────────────────────────────────────────────────────────────────
+
+ENCODING_KINDS: List[str] = ["base64", "rot13", "morse", "zero_width", "homoglyph"]
+
+
+def encode_base64(plain: str) -> str:
+    return base64.b64encode(plain.encode("utf-8")).decode("ascii")
+
+
+def encode_rot13(plain: str) -> str:
+    # 直接借还原器那份映射，不另写一遍 —— ROT13 自反，编解码同一函数。
+    return _rot13(plain)
+
+
+def encode_morse(plain: str) -> str:
+    """字母间空格、词间 ` / `。只保留 A–Z 0–9 —— 其余字符没有摩斯码，
+    硬塞会让 _decode_morse 整段放弃（它要求每一段都认得出）。
+    """
+    table = {ch: code for code, ch in _MORSE_TABLE.items()}
+    words = [w for w in re.split(r"\s+", plain.upper()) if w]
+    body = " / ".join(" ".join(table[c] for c in w if c in table) for w in words)
+    return body if body.strip() else ""
+
+
+def encode_zero_width(plain: str) -> str:
+    # 显式写死 U+200B，不用 next(iter(_ZERO_WIDTH))：Python 的 set 无序，
+    # 端上那侧取的是有序集合的首元素，两端一旦取到不同字符就静默分叉。
+    return "".join(c + "\u200b" for c in plain)
+
+
+def encode_homoglyph(plain: str) -> str:
+    """拉丁字母 → 西里尔 / 希腊同形字。
+
+    先按同形字码点升序排序、**取首个（码点最小）**再建反查表：正向表里 `a` 同时有
+    西里尔 `а`(U+0430) 与希腊 `α`(U+03B1) 两个候选，直接建表得到哪一个是**迭代顺序**
+    说了算 —— 排序 + first-wins 是语言无关的确定性规则，端上同理。
+    """
+    reverse: dict = {}
+    for fake, ascii_ch in sorted(_HOMOGLYPH.items(), key=lambda kv: ord(kv[0])):
+        reverse.setdefault(ascii_ch, fake)
+    return "".join(reverse.get(c, c) for c in plain)
+
+
+def encode(kind: str, plain: str) -> str:
+    """按 kind 编码；认不出的 kind 返回原文（宁可原样，也不猜一个）。"""
+    fn = {
+        "base64": encode_base64,
+        "rot13": encode_rot13,
+        "morse": encode_morse,
+        "zero_width": encode_zero_width,
+        "homoglyph": encode_homoglyph,
+    }.get(kind)
+    return fn(plain) if fn else plain

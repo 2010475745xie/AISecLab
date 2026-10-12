@@ -30,7 +30,19 @@ data class TestCase(
      * 非安全维度的用例（一致性/事实性/鲁棒性）本来就不是越狱，如实标 [JailbreakStrategy.NONE]
      * ——不要为了"看起来有标签"而硬塞一个策略，那会让 Strategy-ASR 的分母混进不属于它的样本。
      */
-    val strategy: JailbreakStrategy = JailbreakStrategy.NONE
+    val strategy: JailbreakStrategy = JailbreakStrategy.NONE,
+    /**
+     * 该用例的请求体是否经过**编码混淆**（Base64 / ROT13 / Morse / 零宽字符 / 同形字）。
+     *
+     * 为什么单独留一个布尔而不是只看 `strategy == ENCODING`：二者会分叉 ——
+     * 一条用例可以在 roleplay 包装里再嵌一层 base64（`strategy` 记主策略，`encoded` 记事实）；
+     * 反过来「请解码这段 Base64」（`strategy = ENCODING`）也可能指向一段没编码的明文。
+     * 这个字段是给**编码还原率**这类指标用的分母，必须如实反映"这条真的编码了没有"。
+     *
+     * 默认 `false`：旧用例集没有这个标注，且两端都开着忽略未知键
+     * （字段名对不上是**静默丢弃**，不会报错）—— 所以两端字段名必须逐字一致。
+     */
+    val encoded: Boolean = false
 )
 
 /**

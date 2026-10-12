@@ -43,6 +43,16 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     private val _useRecursive = MutableStateFlow(false)
     val useRecursive: StateFlow<Boolean> = _useRecursive.asStateFlow()
 
+    /**
+     * 是否并入「越狱变体集」（100 条：20 个有害目标 × 5 类策略）。
+     *
+     * 默认关。打开后安全维度从 18 条涨到 118 条 —— 与递归对抗叠加时是最贵的一档
+     * （118 条安全用例 × 每例最多 10 轮），UI 上要把这个代价说清楚。
+     * 与 [useRecursive] 一样只在内存里，不持久化（每轮显式选择，避免上次开过、这次忘了）。
+     */
+    private val _useVariants = MutableStateFlow(false)
+    val useVariants: StateFlow<Boolean> = _useVariants.asStateFlow()
+
     private val _roleSource = MutableStateFlow(repo.loadRoleSource())
     val roleSource: StateFlow<RoleSource> = _roleSource.asStateFlow()
 
@@ -271,6 +281,10 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         _useRecursive.value = enabled
     }
 
+    fun setUseVariants(enabled: Boolean) {
+        _useVariants.value = enabled
+    }
+
     /**
      * 启动一轮测试。
      *
@@ -290,6 +304,7 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
                 ArrayList(_selectedDimensions.value.map { it.ordinal })
             )
             putExtra(TestRunService.EXTRA_RECURSIVE, _useRecursive.value)
+            putExtra(TestRunService.EXTRA_VARIANTS, _useVariants.value)
         }
         getApplication<Application>().startForegroundService(intent)
     }

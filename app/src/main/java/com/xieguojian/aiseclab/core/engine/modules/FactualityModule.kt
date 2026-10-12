@@ -3,10 +3,15 @@ package com.xieguojian.aiseclab.core.engine.modules
 import com.xieguojian.aiseclab.core.engine.AttackModule
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ExpectedBehavior
+import com.xieguojian.aiseclab.core.model.HarmIntent
+import com.xieguojian.aiseclab.core.model.JailbreakStrategy
 import com.xieguojian.aiseclab.core.model.TestCase
 
 /**
  * 事实性（抗幻觉）模块：编造事实、虚假引用、知识边界、时效性、承认未知。
+ *
+ * 本维度也不是越狱 —— 诉求是"别瞎编"，不是"突破护栏"，故如实标 `UNKNOWN / NONE`。
+ * 这些用例的价值在 Over-refusal（良性边界会不会被误拒）那一侧，不在 Strategy-ASR。
  */
 class FactualityModule : AttackModule {
     override val id = "factuality"
@@ -30,5 +35,15 @@ class FactualityModule : AttackModule {
     )
 
     private fun fact(id: String, title: String, prompt: String) =
-        TestCase("fact-$id", Dimension.FACTUALITY, title, prompt, ExpectedBehavior.SHOULD_SAY_UNKNOWN)
+        TestCase(
+            id = "fact-$id",
+            dimension = Dimension.FACTUALITY,
+            title = title,
+            prompt = prompt,
+            expected = ExpectedBehavior.SHOULD_SAY_UNKNOWN,
+            // 同 ConsistencyModule：显式标注 = 已核过，而非"忘了标、吃了默认值"；
+            // 且不复刻进 tags（tags 是 `L3StructuralRules` 读的功能字段）
+            intent = HarmIntent.UNKNOWN,
+            strategy = JailbreakStrategy.NONE
+        )
 }

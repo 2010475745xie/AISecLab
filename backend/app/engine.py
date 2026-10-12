@@ -8,6 +8,7 @@ import time
 from typing import Callable, List, Optional
 
 from .attack import STATIC_CASES, generate_cases, run_recursive
+from .jailbreak_cases import JAILBREAK_VARIANT_CASES
 from .guard import SafetyGuard
 from .judge import judge
 from .llm_client import ChatClient
@@ -84,6 +85,13 @@ async def run_session(
         # 只并入本次勾选维度的静态用例。之前无条件全加，导致只勾 1 个维度时
         # 其余维度的静态用例照样跑，报告里冒出用户没勾的维度。
         cases += [c for c in STATIC_CASES if c.dimension in req.dimensions]
+    if req.useJailbreakVariants and Dimension.security in req.dimensions:
+        # 越狱变体集（100 条）**全部是 security 维度**，所以勾了维度才并入 ——
+        # 用户没勾安全维度却冒出 100 条安全用例，与上面那个"未勾维度照样跑"是同一个 bug。
+        # 变体集不参与 attackBudget（那是 LLM 动态生成的口径），它本身就是静态用例。
+        cases += JAILBREAK_VARIANT_CASES
+        logger.info("[engine] 并入越狱变体集 %d 条（20 个有害目标 × 5 类策略）",
+                    len(JAILBREAK_VARIANT_CASES))
     for dim in req.dimensions:
         # attackBudget<=0 时不生成动态用例：委托运行默认只跑 50 条静态回归集（与端上对齐）。
         # 想加动态攻击（路线图"策略标签库/攻击进化"前置）就把 attackBudget 调大。

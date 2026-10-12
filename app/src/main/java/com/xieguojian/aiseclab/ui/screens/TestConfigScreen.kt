@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.xieguojian.aiseclab.core.engine.modules.ConsistencyModule
 import com.xieguojian.aiseclab.core.engine.modules.FactualityModule
+import com.xieguojian.aiseclab.core.engine.modules.JailbreakVariantsModule
 import com.xieguojian.aiseclab.core.engine.modules.RobustnessModule
 import com.xieguojian.aiseclab.core.engine.modules.SecurityModule
 import com.xieguojian.aiseclab.core.model.Dimension
@@ -42,6 +43,7 @@ import com.xieguojian.aiseclab.ui.TestViewModel
 fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit) {
     val selected by vm.selectedDimensions.collectAsState()
     val useRecursive by vm.useRecursive.collectAsState()
+    val useVariants by vm.useVariants.collectAsState()
     val roleSource by vm.roleSource.collectAsState()
         val aux by vm.aux.collectAsState()
         val backendUrl by vm.backendUrl.collectAsState()
@@ -51,9 +53,14 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
 
     // 每个维度实际有多少条用例：让用户在点「开始测试」前就知道这一轮的规模。
     // 条数直接决定耗时和 API 花费，而之前勾完维度是一点概念都没有的。
-    val casesPerDim = remember {
-        listOf(SecurityModule(), ConsistencyModule(), FactualityModule(), RobustnessModule())
+    val variantCount = remember { JailbreakVariantsModule().buildCases().size }
+    val casesPerDim = remember(useVariants) {
+        val base = listOf(SecurityModule(), ConsistencyModule(), FactualityModule(), RobustnessModule())
             .associate { it.dimension to it.buildCases().size }
+        // 变体集只挂在安全维度上：打开后该维度条数必须跟着涨，
+        // 否则界面上写的「本轮 X 条」是假的 —— 用户按这个数字估时间与花费。
+        if (useVariants) base + (Dimension.SECURITY to (base.getValue(Dimension.SECURITY) + variantCount))
+        else base
     }
     val totalCases = selected.sumOf { casesPerDim[it] ?: 0 }
 
@@ -145,6 +152,31 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
             "⏱ 递归对抗攻击会多轮迭代生成更强的攻击 prompt，所用时间较长，请谨慎选择。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(16.dp))
+        // 越狱变体集：同一批有害意图 × 5 类策略（角色扮演/系统提示覆盖/虚构情境/编码混淆/拒绝抑制）
+        // × 各 20 条 = 100 条。加了它才能回答「换个包装还攻不攻得破」，代价是安全维度条数 ×6.5。
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("越狱变体集", style = MaterialTheme.typography.titleMedium)
+            }
+            Switch(
+                checked = useVariants,
+                onCheckedChange = { vm.setUseVariants(it) },
+                enabled = Dimension.SECURITY in selected
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (Dimension.SECURITY !in selected)
+                "需先勾选「安全性」维度 —— 变体集是安全用例，只勾别的维度它不会跑。"
+            else "💥 再并入 $variantCount 条：20 个有害目标 × 5 类策略" +
+                "（角色扮演 / 系统提示覆盖 / 虚构情境 / 编码混淆 / 拒绝抑制）。" +
+                "用同一批意图只换包装，用来量「哪种手法最容易得手」。",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (Dimension.SECURITY !in selected) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         Spacer(Modifier.height(16.dp))

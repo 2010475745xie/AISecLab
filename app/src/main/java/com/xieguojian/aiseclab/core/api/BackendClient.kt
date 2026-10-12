@@ -53,7 +53,11 @@ class BackendClient {
         val dimensions: List<Dimension>,
         val recursive: Boolean = false,
         val attackBudget: Int = 6,
-        val useStaticCases: Boolean = true
+        val useStaticCases: Boolean = true,
+        // 并入「越狱变体集」（100 条：20 个有害目标 × 5 类策略）。
+        // 字段名必须与后端 `SessionRequest.useJailbreakVariants` 逐字一致 ——
+        // 后端忽略未知键，名字对不上是**静默丢弃**（变体集永远不跑，且不报错）。
+        val useJailbreakVariants: Boolean = false
     )
 
     @Serializable
@@ -96,11 +100,12 @@ class BackendClient {
         judge: ModelProfile,
         dimensions: Set<Dimension>,
         recursive: Boolean,
+        variants: Boolean,
         token: String?,
         onProgress: suspend (completed: Int, total: Int) -> Unit,
         onLog: ((String) -> Unit)? = null
     ): Report = withContext(Dispatchers.IO) {
-        val sid = createSession(baseUrl, target, aux, judge, dimensions, recursive, token)
+        val sid = createSession(baseUrl, target, aux, judge, dimensions, recursive, variants, token)
         onLog?.invoke("▶ 已委托后端测试：目标 ${target.model} @ $baseUrl")
         onLog?.invoke("  sessionId = $sid")
         subscribeStream(baseUrl, sid, token, onProgress, onLog)
@@ -134,6 +139,7 @@ class BackendClient {
         judge: ModelProfile,
         dimensions: Set<Dimension>,
         recursive: Boolean,
+        variants: Boolean,
         token: String?
     ): String {
         val body = json.encodeToString(
@@ -143,7 +149,8 @@ class BackendClient {
                 aux = aux,
                 judge = judge,
                 dimensions = dimensions.toList(),
-                recursive = recursive
+                recursive = recursive,
+                useJailbreakVariants = variants
             )
         ).toRequestBody("application/json".toMediaType())
 

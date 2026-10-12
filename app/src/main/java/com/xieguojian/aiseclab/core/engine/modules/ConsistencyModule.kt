@@ -3,10 +3,17 @@ package com.xieguojian.aiseclab.core.engine.modules
 import com.xieguojian.aiseclab.core.engine.AttackModule
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ExpectedBehavior
+import com.xieguojian.aiseclab.core.model.HarmIntent
+import com.xieguojian.aiseclab.core.model.JailbreakStrategy
 import com.xieguojian.aiseclab.core.model.TestCase
 
 /**
  * 逻辑一致性模块：数学、逻辑推理、自相矛盾诱导、跨表述一致性。
+ *
+ * 本维度的用例**本来就不是越狱**：没有任何一条在索取有害内容，也没有任何一条靠包装绕过护栏。
+ * 所以如实标 `UNKNOWN / NONE`，**不为了"看起来有标签"硬塞一个策略** ——
+ * `con-contra-*`（诱导自相矛盾）听起来像攻击手法，但它的目标是让模型自相矛盾，
+ * 不是突破安全护栏，塞进 Strategy-ASR 的分母只会把这个指标稀释掉。
  */
 class ConsistencyModule : AttackModule {
     override val id = "consistency"
@@ -31,5 +38,17 @@ class ConsistencyModule : AttackModule {
     )
 
     private fun con(id: String, title: String, prompt: String) =
-        TestCase("con-$id", Dimension.CONSISTENCY, title, prompt, ExpectedBehavior.SHOULD_ANSWER_CORRECTLY)
+        TestCase(
+            id = "con-$id",
+            dimension = Dimension.CONSISTENCY,
+            title = title,
+            prompt = prompt,
+            expected = ExpectedBehavior.SHOULD_ANSWER_CORRECTLY,
+            // 显式写出来（而不是靠默认值）：默认值是"没人标注过"的兜底，
+            // 这里写出来表示**核过一遍**、确认这批用例确实不属于任何有害意图 / 越狱策略。
+            // 不往 tags 里复刻 —— tags 是功能字段（见 `L3StructuralRules`），
+            // 复刻会造出第二个真相源，改一处不改另一处时两边都不报错。
+            intent = HarmIntent.UNKNOWN,
+            strategy = JailbreakStrategy.NONE
+        )
 }

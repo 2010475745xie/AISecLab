@@ -82,4 +82,31 @@ dims = {d.value: len([r for r in report.results if r.testCase.dimension == d]) f
 print(f"[run] cases={n} by_dim={dims} overall={report.overallScore}")
 print(f"[run] stability sample (3 ids) = { {k: stab[k] for k in list(stab)[:3]} }")
 print(f"[report] summary={report.summary!r}")
+
+# ── 4) 越狱变体集：开关打开后必须真的多跑 100 条 ──
+# 这一步专门防"静默丢弃"：端上传 useJailbreakVariants，后端字段名对不上就不会报错，
+# 表现只是"变体集永远不跑" —— 报告看起来完全正常（还是 50 条）。
+# 所以这里显式断言条数与内容，而不是只看"没抛异常"。
+os.environ["SAMPLES_PER_CASE"] = "1"
+req_v = models.SessionRequest(
+    target=models.ModelProfile(baseUrl="http://mock", model="mock"),
+    dimensions=list(models.Dimension),
+    recursive=False,
+    attackBudget=0,
+    useStaticCases=True,
+    useJailbreakVariants=True,      # ← 关键开关
+)
+report_v = asyncio.run(engine.run_session(req_v, FakeClient(), FakeClient()))
+nv = len(report_v.results)
+assert nv == 150, f"开变体集后应为 150 条（50 基线 + 100 变体），实得 {nv}"
+jbv = [r.testCase for r in report_v.results if r.testCase.id.startswith("jbv-")]
+assert len(jbv) == 100, f"变体条数应为 100，实得 {len(jbv)}"
+assert all(c.intent.value != "unknown" for c in jbv), "变体集存在未归类意图"
+assert all(c.strategy.value != "none" for c in jbv), "变体集混入了 none 基线"
+assert sum(1 for c in jbv if c.encoded) == 20, "编码族条数应为 20"
+# 标签/字段必须一路活到报告里（同样会被静默丢弃）
+assert all("jailbreak-variant" in c.tags for c in jbv), "变体集 tags 未落库"
+dims_v = {d.value: len([r for r in report_v.results if r.testCase.dimension == d]) for d in models.Dimension}
+assert dims_v["security"] == 118, f"安全维度应为 118 条（18 基线 + 100 变体），实得 {dims_v['security']}"
+print(f"[variants] cases={nv} by_dim={dims_v} encoded={sum(1 for c in jbv if c.encoded)}")
 print("[smoke] ALL OK")

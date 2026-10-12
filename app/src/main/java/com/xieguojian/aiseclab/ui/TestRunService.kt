@@ -71,6 +71,7 @@ class TestRunService : Service() {
             ?.toSet())
             ?: Dimension.values().toSet()
         val recursive = intent?.getBooleanExtra(EXTRA_RECURSIVE, false) ?: false
+        val variants = intent?.getBooleanExtra(EXTRA_VARIANTS, false) ?: false
 
         val repo = ProfileRepository(this)
         val target = repo.loadTarget()
@@ -103,6 +104,7 @@ class TestRunService : Service() {
                     appendLine("目标模型：${target.name.ifBlank { target.id }}")
                     appendLine("维度：${dims.joinToString("/") { it.label }}")
                     appendLine("递归对抗：$recursive")
+                    appendLine("越狱变体集：$variants（${if (variants) "已并入 100 条" else "未并入"}）")
                 }
             )
             val client = BackendClient()
@@ -111,7 +113,7 @@ class TestRunService : Service() {
                 TokenMeter.reset()
                 TestRunStateHolder.update(TestViewModel.TestState.Running(0, 0))
                 TestRunStateHolder.appendLog("🖥 委托后端运行：$backendUrl")
-                TestRunStateHolder.appendLog("▶ 维度：${dims.joinToString("/") { it.label }} · 递归对抗=$recursive")
+                TestRunStateHolder.appendLog("▶ 维度：${dims.joinToString("/") { it.label }} · 递归对抗=$recursive · 越狱变体集=$variants")
                 try {
                     val report = client.run(
                         baseUrl = backendUrl,
@@ -120,6 +122,7 @@ class TestRunService : Service() {
                         judge = judgeProfile,
                         dimensions = dims,
                         recursive = recursive,
+                        variants = variants,
                         token = repo.loadBackendToken(),
                         onProgress = { c, t -> onProgress(c, t) },
                         onLog = { TestRunStateHolder.appendLog(it) }
@@ -174,13 +177,14 @@ class TestRunService : Service() {
                 appendLine("目标模型：${target.name.ifBlank { target.id }}")
                 appendLine("维度：${dims.joinToString("/") { it.label }}")
                 appendLine("递归对抗：$recursive")
+                appendLine("越狱变体集：$variants")
             }
         )
 
-        val session = TestSession(application, target, aux, guard, roleSource, dims, recursive)
+        val session = TestSession(application, target, aux, guard, roleSource, dims, recursive, variants)
         scope.launch {
             TestRunStateHolder.update(TestViewModel.TestState.Running(0, 0))
-            TestRunStateHolder.appendLog("▶ 本地模式：端上直接跑（${dims.size} 个维度 · 递归对抗=$recursive）")
+            TestRunStateHolder.appendLog("▶ 本地模式：端上直接跑（${dims.size} 个维度 · 递归对抗=$recursive · 越狱变体集=$variants）")
             TestRunStateHolder.appendLog("准备中…（加载模型 / 规则引擎）")
             try {
                 val report = session.run(
@@ -295,6 +299,7 @@ class TestRunService : Service() {
         const val CHANNEL_ID = "aiseclab_test_run"
         const val EXTRA_DIMENSIONS = "extra_dimensions"
         const val EXTRA_RECURSIVE = "extra_recursive"
+        const val EXTRA_VARIANTS = "extra_variants"
         const val ACTION_STOP = "com.xieguojian.aiseclab.action.STOP"
     }
 }
