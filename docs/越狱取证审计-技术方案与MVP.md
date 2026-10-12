@@ -43,6 +43,29 @@
 > 每项标注：**实现要点 / 验收标准 / 落在现有代码的位置**。
 > 现有扩展点：`AttackModule`、`Judge`、`LlmJudge(chat, roles)`、`ScoringModel`、`ReportGenerator`。
 
+### 落地状态（2026-10-12 快照，commits `8dfa191` / `7630980`）
+
+**✓ 已完成 4 项（周 1 地基全部）**
+
+| # | 落地物 | 复现 |
+|---|---|---|
+| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（12 条 / 7 族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
+| 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
+| 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
+| 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，100 条 = 20 目标 × 5 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→150 条） |
+
+**~ 部分完成 4 项**：2.3 置信门控（门控已有，"低置信升级链路可观测"未做）、
+3.1 多轮侵蚀执行器（`RecursiveAdversarialAttack` 已有，非 T1 暖场→加压→TN 结构）、
+3.2 逐轮记录（`AttackRound` 已落 prompt/response/refused，缺 `refusalStrength`/`compliance`/`toolCalls`）、
+4.1 取证报告（四维报告 + 4 张图已有，缺策略×意图矩阵 / 破防轮次 / 失效层 / 加固建议）。
+
+**✗ 未开始 8 项**：2.1 否定感知拒绝打分、2.2 半妥协检测、3.3 侵蚀曲线 & `breakRound`、
+3.4 分层破防归因、3.5 加固建议、4.2 新指标面板、4.3 内部信号、4.4 众测对比。
+
+> ⚠️ **3.4 分层破防归因的隐患**：被测模型是纯 chat API，**没有真正的「工具层」**。
+> 硬做四层归因只能靠 LLM 编，答辩被追问会穿帮 → 建议压成**可从响应文本证伪**的层
+> （输入层 / 输出层为主，规划层加限定）。
+
 ### 周 1 — 地基：意图×策略解耦 + 编码还原
 | # | 功能 | 实现要点 | 验收 |
 |---|---|---|---|
