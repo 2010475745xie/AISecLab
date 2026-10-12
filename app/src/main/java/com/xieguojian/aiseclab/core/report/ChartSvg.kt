@@ -49,7 +49,10 @@ object ChartSvg {
         return sb.toString()
     }
 
-    /** 攻击演进时间轴：一格 = 一次攻击步进；红 = 破防（该步之后停止），绿 = 未破防。 */
+    /**
+     * 攻击演进时间轴：一格 = 一次攻击步进；红 = 该步回答里【无】拒绝话术（该步之后停止），
+     * 绿 = 有。⚠️ 这是攻击循环自己的启发式，**不是**判定结论（见 [ChartLegend.TIMELINE]）。
+     */
     fun timeline(rounds: List<AttackRound>): String {
         if (rounds.isEmpty()) return ""
         val box = 20
@@ -58,7 +61,7 @@ object ChartSvg {
         val h = box + 16
         val sb = StringBuilder()
         sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"$w\" height=\"$h\" viewBox=\"0 0 $w $h\" role=\"img\">")
-        sb.append("<title>攻击演进时间轴</title><desc>每次攻击步进的破防/未破防状态</desc>")
+        sb.append("<title>攻击演进时间轴</title><desc>每次攻击步进中，该步回答是否包含拒绝话术（启发式，非判定结论）</desc>")
         rounds.forEachIndexed { i, rd ->
             val x = i * (box + gap)
             val fill = ChartPalette.toHex(if (rd.refused) ChartPalette.PASS else ChartPalette.FAIL)
@@ -108,7 +111,7 @@ object ChartSvg {
     }
 
     /**
-     * 多轮侵蚀曲线：横轴步序、纵轴累计破防率。柱 + 折线两种读法叠加 ——
+     * 多轮侵蚀曲线：横轴步序、纵轴**累计失守率**（只认最终判定 FAIL 的用例）。柱 + 折线两种读法叠加 ——
      * 柱给出每一步的绝对高度，折线让"爬升得快不快"一眼可见。
      *
      * 取数**只认 [ErosionPoint]**（由 `ErosionAnalysis` 算好），本函数不做任何统计，
@@ -131,7 +134,7 @@ object ChartSvg {
 
         val sb = StringBuilder()
         sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"$w\" height=\"$h\" viewBox=\"0 0 $w $h\" role=\"img\">")
-        sb.append("<title>多轮侵蚀曲线</title><desc>累计破防率随攻击步序的变化</desc>")
+        sb.append("<title>多轮侵蚀曲线</title><desc>累计失守率随攻击步序的变化（以最终判定为准）</desc>")
 
         // 0% / 50% / 100% 参考线（只在左端标数，避免和柱体重叠）
         listOf(0f, 0.5f, 1f).forEach { g ->

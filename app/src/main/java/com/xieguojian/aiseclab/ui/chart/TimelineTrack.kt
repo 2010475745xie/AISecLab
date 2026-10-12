@@ -25,7 +25,11 @@ import com.xieguojian.aiseclab.core.report.ChartLegend
 import com.xieguojian.aiseclab.core.report.ChartPalette
 
 /**
- * 攻击演进时间轴：一格 = 一次攻击步进，绿=未破防、红=破防。
+ * 攻击演进时间轴：一格 = 一次攻击步进，绿 = 该步回答里有拒绝、红 = 没有。
+ *
+ * ⚠️ 红格**不等于**「这条用例被攻破」：红绿只反映该步回答里有没有拒绝话术，
+ * 是攻击循环自己的启发式（后端每用例只判最后一轮）。所以一条 verdict=PASS 的用例
+ * 照样可能出现红格 —— 别把它读成矛盾（2026-10-12 真机验证后统一了口径）。
  *
  * ⚠️ 这**不是**分支树。PAIR 是单链递归（每轮在上轮基础上改写一个 prompt），
  * 画成树等于用可视化撒谎 —— 想要树得先改攻击器支持并行分支。
@@ -62,7 +66,7 @@ fun TimelineTrack(
                         .clip(RoundedCornerShape(4.dp))
                         .background(Color(if (broke) ChartPalette.FAIL else ChartPalette.PASS))
                 ) {
-                    // 破防格加一圈深色描边：色弱用户只靠色相分不出来
+                    // 无拒绝格加一圈深色描边：色弱用户只靠色相分不出来
                     if (broke) {
                         Box(
                             Modifier

@@ -219,7 +219,7 @@ fun ReportScreen(
                 Spacer(Modifier.height(6.dp))
             }
             item { MetricsPanel(metrics) }
-            if (metrics.matrix.isNotEmpty()) {
+            if (metrics.matrixUsable) {
                 item {
                     Spacer(Modifier.height(10.dp))
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -473,16 +473,21 @@ fun ReportScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(erosion.headline, style = MaterialTheme.typography.bodyMedium)
-                if (erosion.exclusionNote.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        erosion.exclusionNote,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                // 两条「信号不一致」的说明必须跟着 headline 显示：
+                // 它们是「失守 0 条」与「某步无拒绝话术」同时出现时的解释，
+                // 不显示的话读者只会认为报告在瞎算（真机验证时就是这么撞上的）。
+                listOf(erosion.exclusionNote, erosion.disagreementNote, erosion.unresolvedNote)
+                    .filter { it.isNotEmpty() }
+                    .forEach {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
             }
-            if (erosion.hasData) {
+            if (erosion.evaluated > 0) {
                 item {
                     Spacer(Modifier.height(10.dp))
                     ErosionTrack(erosion)
@@ -652,12 +657,14 @@ private fun ErosionRow(c: ErosionCurve) {
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "已破防 ${c.broken} · 破防步数 P50 ${oneDecimal(c.p50)} · P90 ${oneDecimal(c.p90)}",
+                "可评估多步 ${c.total} · 判定失守 ${c.failed} · 定位出破防步 ${c.located}",
                 style = MaterialTheme.typography.bodySmall
             )
             Text(
-                "全程未破防 ${c.alwaysRefused} · ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步破防 ${c.brokeEarly}" +
-                    if (c.excludedUnmeasured > 0) " · 剔除不可评估 ${c.excludedUnmeasured} 条" else "",
+                "破防步数 P50 ${oneDecimal(c.p50)} · P90 ${oneDecimal(c.p90)}" +
+                    " · ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步失守 ${c.brokeEarly}" +
+                    (if (c.unresolved > 0) " · 定位不出破防步 ${c.unresolved} 条" else "") +
+                    (if (c.excludedUnmeasured > 0) " · 剔除不可评估 ${c.excludedUnmeasured} 条" else ""),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

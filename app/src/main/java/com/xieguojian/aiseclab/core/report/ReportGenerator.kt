@@ -71,7 +71,7 @@ object ReportGenerator {
             append("| 指标 | 值 | 口径 |\n|---|---|---|\n")
             metrics.rows().forEach { m -> append("| ${m.label} | ${m.value} | ${m.hint} |\n") }
             append("\n")
-            if (metrics.matrix.isNotEmpty()) {
+            if (metrics.matrixUsable) {
                 append("### 策略 × 意图\n\n")
                 append("${ChartLegend.MATRIX}\n\n")
                 append("| 策略族 | " + metrics.matrixIntents.joinToString(" | ") { it.label } + " |\n")
@@ -138,11 +138,13 @@ object ReportGenerator {
             }
         }
 
-        // ── 攻击演进：多步用例的逐步破防情况 ──
+        // ── 攻击演进：多步用例的逐步拒绝情况 ──
         // 独立成章，**不放进**「失守明细」：失守 0 条的模型同样有多步攻击记录，
         // 挂在失守明细里就会随失守条数一起消失（2026-10-12 真机验证时抓到的导出 bug：
         // 同一条 fixture 报告 App 页看得到时间轴、导出的 HTML 里却没有）。
-        // Markdown 画不了 SVG，用纯文本版：每步的轮次 + 是否破防。
+        // Markdown 画不了 SVG，用纯文本版：每步的轮次 + 该步回答里有没有拒绝话术。
+        // ⚠️ 标签写「有拒绝 / 无拒绝」而**不写「破防」**：它只是攻击循环的启发式，
+        // 后端每用例只判最后一轮 —— 写成「破防」会与同页的 verdict / 失守明细互相打架。
         val trailCases = sections.trailCases
         if (trailCases.isNotEmpty()) {
             append("## 攻击演进\n\n")
@@ -151,29 +153,31 @@ object ReportGenerator {
                 append("### ${r.testCase.dimension.label} · ${r.testCase.title}")
                 append("（${r.attackRounds.size} 步 · ${r.judgeResult.verdict}）\n\n")
                 append(r.attackRounds.joinToString(" → ") {
-                    "第${it.round}步" + if (it.refused) "未破防" else "**破防**"
+                    "第${it.round}步" + if (it.refused) "有拒绝" else "**无拒绝**"
                 } + "\n\n")
             }
         }
 
         // ── 多轮侵蚀：回答「第几步被磨破」──
         // 独立成章的理由同「攻击演进」：挂在失守明细里会在失守 0 条时整块消失，
-        // 而"全程没被攻破"恰恰是最该看见的结论。取数只走 ErosionAnalysis（报告页同源）。
+        // 而「在步数上限内没被攻破」恰恰是最该看见的结论。取数只走 ErosionAnalysis（报告页同源）。
         if (erosion.multiStepTotal > 0) {
             append("## 多轮侵蚀\n\n")
             append("${ChartLegend.EROSION}\n\n")
             append("${erosion.headline}\n\n")
             if (erosion.exclusionNote.isNotEmpty()) append("${erosion.exclusionNote}\n\n")
-            if (erosion.hasData) {
-                append("| 策略族 | 多步用例 | 已破防 | 破防步数 P50 | P90 | 全程未破防 | ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步破防 |\n")
+            if (erosion.disagreementNote.isNotEmpty()) append("${erosion.disagreementNote}\n\n")
+            if (erosion.unresolvedNote.isNotEmpty()) append("${erosion.unresolvedNote}\n\n")
+            if (erosion.evaluated > 0) {
+                append("| 策略族 | 可评估多步 | 判定失守 | 定位出破防步 | 破防步数 P50 | P90 | ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步失守 |\n")
                 append("|---|---|---|---|---|---|---|\n")
                 erosion.curves.forEach { c ->
-                    append("| ${c.strategy.label} | ${c.total} | ${c.broken} | ${fmtOne(c.p50)} | ${fmtOne(c.p90)} | ")
-                    append("${c.alwaysRefused} | ${c.brokeEarly} |\n")
+                    append("| ${c.strategy.label} | ${c.total} | ${c.failed} | ${c.located} | ")
+                    append("${fmtOne(c.p50)} | ${fmtOne(c.p90)} | ${c.brokeEarly} |\n")
                 }
                 append("\n")
-                // Markdown 画不了 SVG，用 ASCII 台阶把"爬升快不快"表达出来（与报告页同一组数）。
-                append("累计破防率：\n\n")
+                // Markdown 画不了 SVG，用纯文本把「爬升快不快」表达出来（与报告页同一组数）。
+                append("累计失守率：\n\n")
                 append(erosion.overallCumulative.joinToString(" ") { p ->
                     "第${p.step}步 ${"%.0f%%".format(p.rate * 100)}"
                 } + "\n\n")
@@ -328,7 +332,7 @@ object ReportGenerator {
                 append("</tr>")
             }
             append("</table>")
-            if (metrics.matrix.isNotEmpty()) {
+            if (metrics.matrixUsable) {
                 append("<h3>策略 × 意图</h3>")
                 append("<p class=\"meta\">").append(escapeHtml(ChartLegend.MATRIX)).append("</p>")
                 append("<div style=\"overflow-x:auto\"><table style=\"border-collapse:collapse;margin:8px 0\">")
@@ -472,7 +476,13 @@ object ReportGenerator {
             if (erosion.exclusionNote.isNotEmpty()) {
                 append("<p class=\"meta\">${escapeHtml(erosion.exclusionNote)}</p>")
             }
-            if (erosion.hasData) {
+            if (erosion.disagreementNote.isNotEmpty()) {
+                append("<p class=\"meta\">${escapeHtml(erosion.disagreementNote)}</p>")
+            }
+            if (erosion.unresolvedNote.isNotEmpty()) {
+                append("<p class=\"meta\">${escapeHtml(erosion.unresolvedNote)}</p>")
+            }
+            if (erosion.evaluated > 0) {
                 val erosionSvg = ChartSvg.erosionCumulative(erosion.overallCumulative)
                 if (erosionSvg.isNotEmpty()) {
                     append("<div style=\"overflow-x:auto\">").append(erosionSvg).append("</div>")
@@ -480,8 +490,8 @@ object ReportGenerator {
                 append("<table style=\"width:100%;border-collapse:collapse;margin:8px 0\">")
                 append("<tr style=\"background:#f5f5f5\">")
                 listOf(
-                    "策略族", "多步用例", "已破防", "破防步数 P50", "P90",
-                    "全程未破防", "≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步破防"
+                    "策略族", "可评估多步", "判定失守", "定位出破防步", "破防步数 P50", "P90",
+                    "≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步失守"
                 ).forEach {
                     append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">")
                         .append(escapeHtml(it)).append("</th>")
@@ -490,8 +500,8 @@ object ReportGenerator {
                 erosion.curves.forEach { c ->
                     append("<tr>")
                     listOf(
-                        c.strategy.label, "${c.total}", "${c.broken}", fmtOne(c.p50), fmtOne(c.p90),
-                        "${c.alwaysRefused}", "${c.brokeEarly}"
+                        c.strategy.label, "${c.total}", "${c.failed}", "${c.located}",
+                        fmtOne(c.p50), fmtOne(c.p90), "${c.brokeEarly}"
                     ).forEach {
                         append("<td style=\"padding:6px;border:1px solid #e5e5e5\">")
                             .append(escapeHtml(it)).append("</td>")

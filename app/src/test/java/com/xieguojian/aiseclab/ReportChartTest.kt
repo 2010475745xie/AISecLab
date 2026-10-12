@@ -28,7 +28,7 @@ import org.junit.Test
  * 两端反序列化都开着"忽略未知键"，字段接错是**静默丢弃**（图空的、不报错）。
  * 这里把三件事钉死：
  *   1. 格子/条形数 = 数据条数（少一条就是取数写错了）；
- *   2. 时间轴的红色只出现在破防步（颜色错了会把"没攻破"读成"被攻破"）；
+ *   2. 时间轴的红色只出现在「该步无拒绝话术」的格上（颜色错了会把"没拒绝"读成"被攻破"）；
  *   3. 导出件必须**内联 SVG 且不用 script / 外部 CDN**（审计存档要离线能看）。
  */
 class ReportChartTest {
@@ -93,7 +93,7 @@ class ReportChartTest {
     }
 
     @Test
-    fun `时间轴红色只出现在破防步`() {
+    fun `时间轴红色只出现在无拒绝步`() {
         val svg = ChartSvg.timeline(
             listOf(
                 AttackRound(1, "p1", "r1", refused = true),
@@ -101,10 +101,10 @@ class ReportChartTest {
                 AttackRound(3, "p3", "r3", refused = false)
             )
         )
-        // 未破防 2 格绿、破防 1 格红
+        // 有拒绝 2 格绿、无拒绝 1 格红
         assertEquals(2, countOf(svg, ChartPalette.toHex(ChartPalette.PASS)))
         assertEquals(1, countOf(svg, ChartPalette.toHex(ChartPalette.FAIL)))
-        // 破防格另有一圈描边（色弱用户只靠色相分不出来）
+        // 红格另有一圈描边（色弱用户只靠色相分不出来）
         assertEquals("2 绿 + 1 红 + 1 描边", 4, countOf(svg, "<rect "))
     }
 
@@ -156,8 +156,8 @@ class ReportChartTest {
         )
         val md = ReportGenerator.toMarkdown(r)
         assertTrue("Markdown 里没有攻击演进章节", md.contains("## 攻击演进"))
-        assertTrue("破防那一步没被标出来", md.contains("第2步**破防**"))
-        assertTrue("未破防那一步没被标出来", md.contains("第1步未破防"))
+        assertTrue("无拒绝那一步没被标出来", md.contains("第2步**无拒绝**"))
+        assertTrue("有拒绝那一步没被标出来", md.contains("第1步有拒绝"))
     }
 
     @Test
@@ -184,7 +184,7 @@ class ReportChartTest {
 
         val md = ReportGenerator.toMarkdown(r)
         assertTrue("失守 0 条时 Markdown 丢了攻击演进章节", md.contains("## 攻击演进"))
-        assertTrue("破防那一步没被标出来", md.contains("第2步**破防**"))
+        assertTrue("无拒绝那一步没被标出来", md.contains("第2步**无拒绝**"))
         assertFalse("单步用例不该被画进「演进」（没演进可言）", md.contains("ok-single"))
     }
 
@@ -201,6 +201,16 @@ class ReportChartTest {
                 assertFalse("图例里出现了 Markdown 粗体标记（真机会原样显示星号）：$s", s.contains("**"))
                 assertFalse("图例里出现了 Markdown 链接标记：$s", s.contains("]("))
             }
+    }
+
+    @Test
+    fun `时间轴图例不许把红格说成破防`() {
+        // 真机验证（2026-10-12）：一条「失守 0 条 / 通过 50/50」的报告，时间轴上按攻击循环的
+        // refused 启发式标了红格，图例却写「红=破防」—— 同一屏上「破防」与「通过」直接打架。
+        // 逐格红绿只说明「该步回答里有没有拒绝话术」，不是判定结论。用断言钉住措辞。
+        assertFalse("红格不是判定结论，时间轴图例里不能出现「破防」", ChartLegend.TIMELINE.contains("破防"))
+        assertTrue("必须点明红绿来自攻击循环自己的启发式", ChartLegend.TIMELINE.contains("启发式"))
+        assertTrue("必须点明最终判「通过」的用例也可能出现红格", ChartLegend.TIMELINE.contains("通过"))
     }
 
     @Test
