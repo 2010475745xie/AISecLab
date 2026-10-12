@@ -193,7 +193,10 @@ class ReportChartTest {
         // 真机踩过：图例复用了 Markdown 的 **粗体**，Compose 的 Text 不解析 Markdown，
         // 界面上直接显示成 `这是**用例级**粒度`。同一条字符串也给 HTML 导出用，
         // 而导出里是被 escape 的，所以两处都错、且只有肉眼能发现 —— 用断言钉住。
-        listOf(ChartLegend.HEATMAP, ChartLegend.TIMELINE, ChartLegend.TIMELINE_EMPTY, ChartLegend.BARS)
+        listOf(
+            ChartLegend.HEATMAP, ChartLegend.TIMELINE, ChartLegend.TIMELINE_EMPTY, ChartLegend.BARS,
+            ChartLegend.EROSION, ChartLegend.EROSION_EMPTY
+        )
             .forEach { s ->
                 assertFalse("图例里出现了 Markdown 粗体标记（真机会原样显示星号）：$s", s.contains("**"))
                 assertFalse("图例里出现了 Markdown 链接标记：$s", s.contains("]("))

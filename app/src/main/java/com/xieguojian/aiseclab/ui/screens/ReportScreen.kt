@@ -37,8 +37,11 @@ import com.xieguojian.aiseclab.core.report.ReportSections
 import com.xieguojian.aiseclab.core.model.JudgeLevel
 import com.xieguojian.aiseclab.core.report.ChartLegend
 import com.xieguojian.aiseclab.core.report.ChartPalette
+import com.xieguojian.aiseclab.core.report.ErosionAnalysis
+import com.xieguojian.aiseclab.core.report.ErosionCurve
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.chart.BarItem
+import com.xieguojian.aiseclab.ui.chart.ErosionTrack
 import com.xieguojian.aiseclab.ui.chart.MiniBar
 import com.xieguojian.aiseclab.ui.chart.MiniHeatmap
 import com.xieguojian.aiseclab.ui.chart.TimelineTrack
@@ -118,6 +121,12 @@ fun ReportScreen(
     // ⚠️ 必须在 LazyColumn **外面**算：里面是 LazyListScope、不是 @Composable 上下文，
     // 在那儿调 remember 直接编译不过（2026-10-12 踩过）。
     val trailCases = sections.trailCases
+
+    // 多轮侵蚀：只列"≥2 步且可评估"的用例，按设计策略族聚合。
+    // 取数全部收敛在 core/report/ErosionCurve.kt（报告页与两个导出件同源），
+    // 这里连 P50/P90 都不重算 —— 同一份数据三处各算一遍正是历史上走岔的方式。
+    // ⚠️ 同样必须在 LazyColumn 外算。
+    val erosion = remember(report) { ErosionAnalysis.of(report.results) }
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
@@ -406,6 +415,51 @@ fun ReportScreen(
             }
         }
 
+        // ── 多轮侵蚀曲线 ──
+        // 与「攻击演进」的分工：演进看**单条用例**逐步发生了什么，侵蚀看**跨用例**
+        // 「第几步被磨破」。两者都只在多步记录存在时才有意义，所以共享同一个 2 步门槛。
+        if (erosion.multiStepTotal > 0) {
+            item {
+                Spacer(Modifier.height(20.dp))
+                Text("多轮侵蚀", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    ChartLegend.EROSION,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(erosion.headline, style = MaterialTheme.typography.bodyMedium)
+                if (erosion.exclusionNote.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        erosion.exclusionNote,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (erosion.hasData) {
+                item {
+                    Spacer(Modifier.height(10.dp))
+                    ErosionTrack(erosion)
+                }
+                item {
+                    Spacer(Modifier.height(12.dp))
+                    ErosionTable(erosion)
+                }
+            } else {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        ChartLegend.EROSION_EMPTY,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
         item {
             Spacer(Modifier.height(20.dp))
             Text("失守明细", style = MaterialTheme.typography.titleMedium)
@@ -528,6 +582,48 @@ private fun SkippedItem(r: TestResult) {
         }
     }
 }
+
+/**
+ * 侵蚀统计的按策略族明细。
+ *
+ * 为什么不做成 7 列表格：手机宽度下表格列会被静默截成省略号
+ * （`uiautomator dump` 里文本还完整，只有截图能看出来 —— 报告页踩过这个坑）。
+ * 一族一个卡片、两行文字，列宽不必猜。
+ */
+@Composable
+private fun ErosionTable(analysis: ErosionAnalysis) {
+    Column { analysis.curves.forEach { c -> ErosionRow(c) } }
+}
+
+@Composable
+private fun ErosionRow(c: ErosionCurve) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(c.strategy.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(
+                    "${c.total} 条多步",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "已破防 ${c.broken} · 破防步数 P50 ${oneDecimal(c.p50)} · P90 ${oneDecimal(c.p90)}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "全程未破防 ${c.alwaysRefused} · ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步破防 ${c.brokeEarly}" +
+                    if (c.excludedUnmeasured > 0) " · 剔除不可评估 ${c.excludedUnmeasured} 条" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 分位数显示：null = 该族一条都没破防 → `--`（不能显示 0.0）。 */
+private fun oneDecimal(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
 
 /** 基线对比：总分/维度 delta 一览。 */
 @Composable

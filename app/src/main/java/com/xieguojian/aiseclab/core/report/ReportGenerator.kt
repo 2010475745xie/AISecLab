@@ -129,6 +129,31 @@ object ReportGenerator {
             }
         }
 
+        // ── 多轮侵蚀：回答「第几步被磨破」──
+        // 独立成章的理由同「攻击演进」：挂在失守明细里会在失守 0 条时整块消失，
+        // 而"全程没被攻破"恰恰是最该看见的结论。取数只走 ErosionAnalysis（报告页同源）。
+        val erosion = ErosionAnalysis.of(report.results)
+        if (erosion.multiStepTotal > 0) {
+            append("## 多轮侵蚀\n\n")
+            append("${ChartLegend.EROSION}\n\n")
+            append("${erosion.headline}\n\n")
+            if (erosion.exclusionNote.isNotEmpty()) append("${erosion.exclusionNote}\n\n")
+            if (erosion.hasData) {
+                append("| 策略族 | 多步用例 | 已破防 | 破防步数 P50 | P90 | 全程未破防 | ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步破防 |\n")
+                append("|---|---|---|---|---|---|---|\n")
+                erosion.curves.forEach { c ->
+                    append("| ${c.strategy.label} | ${c.total} | ${c.broken} | ${fmtOne(c.p50)} | ${fmtOne(c.p90)} | ")
+                    append("${c.alwaysRefused} | ${c.brokeEarly} |\n")
+                }
+                append("\n")
+                // Markdown 画不了 SVG，用 ASCII 台阶把"爬升快不快"表达出来（与报告页同一组数）。
+                append("累计破防率：\n\n")
+                append(erosion.overallCumulative.joinToString(" ") { p ->
+                    "第${p.step}步 ${"%.0f%%".format(p.rate * 100)}"
+                } + "\n\n")
+            }
+        }
+
         append("## 失守明细\n\n")
         val fails = sections.fails
         if (fails.isEmpty()) {
@@ -359,6 +384,45 @@ object ReportGenerator {
             }
         }
 
+        // ── 多轮侵蚀：独立章节，理由同 Markdown 侧 ──
+        val erosion = ErosionAnalysis.of(report.results)
+        if (erosion.multiStepTotal > 0) {
+            append("<h2>多轮侵蚀</h2>")
+            append("<p class=\"meta\">").append(escapeHtml(ChartLegend.EROSION)).append("</p>")
+            append("<p>${escapeHtml(erosion.headline)}</p>")
+            if (erosion.exclusionNote.isNotEmpty()) {
+                append("<p class=\"meta\">${escapeHtml(erosion.exclusionNote)}</p>")
+            }
+            if (erosion.hasData) {
+                val erosionSvg = ChartSvg.erosionCumulative(erosion.overallCumulative)
+                if (erosionSvg.isNotEmpty()) {
+                    append("<div style=\"overflow-x:auto\">").append(erosionSvg).append("</div>")
+                }
+                append("<table style=\"width:100%;border-collapse:collapse;margin:8px 0\">")
+                append("<tr style=\"background:#f5f5f5\">")
+                listOf(
+                    "策略族", "多步用例", "已破防", "破防步数 P50", "P90",
+                    "全程未破防", "≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步破防"
+                ).forEach {
+                    append("<th style=\"text-align:left;padding:6px;border:1px solid #e5e5e5\">")
+                        .append(escapeHtml(it)).append("</th>")
+                }
+                append("</tr>")
+                erosion.curves.forEach { c ->
+                    append("<tr>")
+                    listOf(
+                        c.strategy.label, "${c.total}", "${c.broken}", fmtOne(c.p50), fmtOne(c.p90),
+                        "${c.alwaysRefused}", "${c.brokeEarly}"
+                    ).forEach {
+                        append("<td style=\"padding:6px;border:1px solid #e5e5e5\">")
+                            .append(escapeHtml(it)).append("</td>")
+                    }
+                    append("</tr>")
+                }
+                append("</table>")
+            }
+        }
+
         append("<h2>失守明细</h2>")
         val fails = sections.fails
         if (fails.isEmpty()) {
@@ -421,6 +485,9 @@ object ReportGenerator {
         }
         append("</body></html>")
     }
+
+    /** 分位数显示：null = 没有可评估的破防样本 → `--`（**不能显示 0.0**，那会读成"第 0 步就破了"）。 */
+    private fun fmtOne(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
 
     private fun riskText(level: RiskLevel): String = when (level) {
         RiskLevel.LOW -> "低风险"

@@ -107,6 +107,69 @@ object ChartSvg {
         return sb.toString()
     }
 
+    /**
+     * 多轮侵蚀曲线：横轴步序、纵轴累计破防率。柱 + 折线两种读法叠加 ——
+     * 柱给出每一步的绝对高度，折线让"爬升得快不快"一眼可见。
+     *
+     * 取数**只认 [ErosionPoint]**（由 `ErosionAnalysis` 算好），本函数不做任何统计，
+     * 免得 Compose 页与导出件各算一遍算岔。
+     */
+    fun erosionCumulative(points: List<ErosionPoint>): String {
+        if (points.isEmpty()) return ""
+        val leftPad = 34
+        val rightPad = 8
+        val topPad = 6
+        val plotH = 52
+        val labelH = 16
+        val cellW = 30
+        val barW = 16
+        val plotW = points.size * cellW
+        val w = leftPad + plotW + rightPad
+        val h = topPad + plotH + labelH
+        val baseY = topPad + plotH
+        val fail = ChartPalette.toHex(ChartPalette.FAIL)
+
+        val sb = StringBuilder()
+        sb.append("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"$w\" height=\"$h\" viewBox=\"0 0 $w $h\" role=\"img\">")
+        sb.append("<title>多轮侵蚀曲线</title><desc>累计破防率随攻击步序的变化</desc>")
+
+        // 0% / 50% / 100% 参考线（只在左端标数，避免和柱体重叠）
+        listOf(0f, 0.5f, 1f).forEach { g ->
+            val y = baseY - (plotH * g)
+            sb.append("<line x1=\"$leftPad\" y1=\"$y\" x2=\"${leftPad + plotW}\" y2=\"$y\" stroke=\"#E5E5E5\" stroke-width=\"1\"/>")
+            sb.append("<text x=\"${leftPad - 5}\" y=\"${y + 3}\" font-size=\"9\" fill=\"#888\" text-anchor=\"end\" style=\"$FONT\">")
+                .append((g * 100).toInt()).append("%</text>")
+        }
+
+        // 柱
+        points.forEachIndexed { i, p ->
+            val rate = p.rate.coerceIn(0f, 1f)
+            val barH = (plotH * rate)
+            val x = leftPad + i * cellW + (cellW - barW) / 2
+            if (barH > 0f) {
+                sb.append("<rect x=\"$x\" y=\"${baseY - barH}\" width=\"$barW\" height=\"$barH\" rx=\"2\" fill=\"$fail\"/>")
+            }
+            // 步序：点多了就隔一个标一个，免得挤成一片
+            if (points.size <= 12 || i % 2 == 0) {
+                sb.append("<text x=\"${leftPad + i * cellW + cellW / 2}\" y=\"${baseY + 12}\" font-size=\"9\" fill=\"#666\" text-anchor=\"middle\" style=\"$FONT\">")
+                    .append(p.step).append("</text>")
+            }
+        }
+
+        // 折线：顶点接在每个柱的顶中点
+        val poly = StringBuilder()
+        points.forEachIndexed { i, p ->
+            if (i > 0) poly.append(' ')
+            poly.append(leftPad + i * cellW + cellW / 2)
+                .append(',')
+                .append(baseY - plotH * p.rate.coerceIn(0f, 1f))
+        }
+        sb.append("<polyline points=\"").append(poly).append("\" fill=\"none\" stroke=\"#9E2B2A\" stroke-width=\"2\" stroke-linejoin=\"round\"/>")
+
+        sb.append("</svg>")
+        return sb.toString()
+    }
+
     private fun escape(s: String): String = s
         .replace("&", "&amp;")
         .replace("<", "&lt;")
