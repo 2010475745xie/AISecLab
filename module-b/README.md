@@ -21,18 +21,27 @@
 | OpenAI 兼容端点 | ✅ `/v1/models`、`/v1/chat/completions`（非流式） |
 | 贡献档位 0 / 3 | ✅ 0/1/2/3 的定义都在，一期上线 0 与 3 |
 | 抽样复算 + credit 记账 | ✅ 机制已实现，**但一期单节点池必然只能记「待复算」**（见下） |
-| **真实本地算力** | ❌ **未接**。本机没有编译好的 llama.cpp，也没有通用对话模型 |
+| **真实本地算力** | ✅ **已接**：llama.cpp `b11565` + Qwen2.5-1.5B-Instruct Q4_K_M，`--backend llama` 已实跑 |
 
-**关于「真实算力」这句必须说清楚**：三种推理后端都已实现且可切换，但当前只跑过 `stub`：
+三种推理后端都可切换，`stub` 与 `llama` 均已实跑：
 
 | 后端 | 用途 | 现状 |
 |---|---|---|
-| `--backend stub` | 确定性桩，用来打通协议 / 调度 / 记账 | ✅ **本次演示用的就是它，无算力** |
-| `--backend llama` | 本地 `llama-server`（一期真正要用的） | 代码就绪，**本机没有可跑的权重，未验** |
-| `--backend upstream` | 开发期借用外部端点；面板会标「⚠ 算力不在本机」 | 代码就绪，未验 |
+| `--backend stub` | 确定性桩，用来打通协议 / 调度 / 记账 | ✅ 已跑（**无算力**，输出是拼出来的字符串） |
+| `--backend llama` | 本地 `llama-server`（一期目标形态） | ✅ **已实跑，真算力**（见「已验证」） |
+| `--backend upstream` | 开发期借用外部端点；面板会标「⚠ 算力不在本机」 | 代码就绪，未跑 |
 
-所以「**共享算力**」这件事，现在共享的是**协调面**（注册 / 调度 / 记账 / 协议），
-不是算力本身。接上一个真跑 `llama-server` 的节点即成为真算力，协议一行不用改。
+所以现在共享的**确实是算力本身**：PC 上 `llama-server` 出 token，手机经模块 B 节点拿到真实回答。
+「接一个真跑 `llama-server` 的节点」这件事已经不是设计，是已经跑通的事实。
+
+**本机依赖（不在仓库里，需自备）**：
+
+| 东西 | 路径 | 说明 |
+|---|---|---|
+| llama.cpp CPU 版 | `C:\third_party\llama.cpp-bin\` | `llama-b11565-bin-win-cpu-x64.zip` 解压即得 |
+| 对话权重 | `C:\models\qwen2.5-1.5b-instruct-q4_k_m.gguf` | 约 1.04 GiB，sha256 见 `configs/default.json` |
+
+> 这两个路径是**本机的**，不是约定。换机器只要改 `--model-path` 和 `--llama-url`。
 
 ---
 
@@ -46,10 +55,18 @@ python -m mb.cli --help
 python -m mb.cli --port 8100 --tier 3 --node-id pc-node-1
 
 # 本地 llama-server（一期目标形态；先自己起好 llama-server）
-python -m mb.cli --port 8100 --tier 3 --backend llama \
-    --llama-url http://127.0.0.1:8080/v1 \
-    --model-id qwen2.5-7b-instruct-q4_k_m --model-path D:/models/qwen2.5-7b-q4_k_m.gguf
+#   1) 起推理引擎
+llama-server.exe -m C:\models\qwen2.5-1.5b-instruct-q4_k_m.gguf \
+    --host 127.0.0.1 --port 18080 -c 4096 -t 8 -np 4
+#   2) 起节点
+python -m mb.cli --port 8100 --tier 3 --node-id pc-node-1 \
+    --backend llama --llama-url http://127.0.0.1:18080/v1 \
+    --model-id qwen2.5-1.5b-instruct-q4_k_m \
+    --model-path C:/models/qwen2.5-1.5b-instruct-q4_k_m.gguf
 ```
+
+给了 `--model-path` 时程序会**现场算权重 sha256 并与注册表比对**，不一致会明确告警
+（那正是 §5 要拦的「同一模型名、不同量化版本混进一个池子」）。
 
 启动后会打印：
 
@@ -60,6 +77,9 @@ python -m mb.cli --port 8100 --tier 3 --backend llama \
 
 **默认只绑 `127.0.0.1`**：真机联调用 `adb reverse tcp:8100 tcp:8100` 就够，
 不必把服务暴露到整个局域网。需要别的机器直连时显式 `--host 0.0.0.0`。
+
+> `--llama-url` 默认是 `8080`。本机 `8080` 被别的东西占了（探测超时），
+> 所以这里用 `18080` —— 端口是参数，不是硬编码。
 
 ### 自检（不花钱、不触网）
 
@@ -150,7 +170,7 @@ module-b/
 │   ├── coordinator.py  调度 + 记账 + 推理的编排层（不含 HTTP，便于离线测）
 │   ├── server.py       HTTP 层 + 极简本地面板
 │   └── cli.py          启动入口
-├── configs/default.json  模型注册表（桩模型，哈希是标记文本的 sha256）
+├── configs/default.json  模型注册表（2 个桩 + 1 个真实模型，哈希都是真 sha256）
 ├── tools/smoke.py        对运行中的节点打协议冒烟
 ├── tests/test_mb.py      47 条离线单测（不触网、不需要权重）
 └── run.bat               Windows 一键起节点
@@ -163,9 +183,11 @@ module-b/
   能力过滤四条分支、派单排序、抽样复算的一致与不一致两条分支、软上限降级与 429、
   OpenAI 形状、501、Key 校验、面板渲染、档位热切换后立刻 503。
 - 真起节点 + 真 HTTP：`/healthz`、`/v1/models`、`/v1/chat/completions`（按模块 A 的请求形状）。
-- **手机侧可达**：`adb reverse tcp:8100` 后在**手机上**用 `curl` 打通节点，拿到标准响应。
+- **真算力**：`llama-server` 加载 Qwen2.5-1.5B-Instruct 后 2.6s 就绪；
+  经模块 B 节点返回真回答（PC 侧 676ms / 手机侧 362ms），`mb.backend == "llama-server"`。
+- **手机侧可达**：`adb reverse tcp:8100` 后在**手机上**用 `curl` 打通节点，拿到真实回答。
 
 **未验证**：
-- 真实本地推理（`--backend llama`）—— 本机无 llama.cpp 产物与通用对话模型。
-- 模块 A 端真正把本节点当被测模型跑完一轮（需要真填 CONFIG 并发起测试，会产生模型费用）。
+- 模块 A 端真正把本节点当被测模型**跑完一轮测评**（需真填 CONFIG 并发起，会消耗裁判模型费用）。
 - 多节点调度与真实复算仲裁（需要至少两台真机器）。
+- 手机档位 1 / 2（二期）。

@@ -27,6 +27,19 @@
       ],
       "label": "桩模型 7B（无真实权重，仅供联调）",
       "file_name": ""
+    },
+    {
+      "model_id": "qwen2.5-1.5b-instruct-q4_k_m",
+      "weights_hash": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+      "quant": "q4_k_m",
+      "params_b": 1.5,
+      "min_ram_mb": 2500,
+      "min_vram_mb": 0,
+      "node_tiers": [
+        "pc"
+      ],
+      "label": "Qwen2.5-1.5B-Instruct Q4_K_M（真实对话权重）",
+      "file_name": "qwen2.5-1.5b-instruct-q4_k_m.gguf"
     }
   ]
 }
