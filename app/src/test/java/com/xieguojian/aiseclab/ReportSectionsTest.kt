@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab
 
+import com.xieguojian.aiseclab.core.model.AttackRound
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ExpectedBehavior
 import com.xieguojian.aiseclab.core.model.JudgeLevel
@@ -148,6 +149,39 @@ class ReportSectionsTest {
         )
         assertEquals(mapOf(Dimension.SECURITY to 2, Dimension.ROBUSTNESS to 1), s.unassessedByDim)
         assertEquals(3, s.unassessedCount)
+    }
+
+    @Test
+    fun `攻击演进视图只收多步用例且不计入五路分区`() {
+        // trailCases 是「另一个视图」不是第六路：一条多步用例同时也在 passPlain 里，
+        // 所以它既不参与互斥性、也不能并进 total。
+        val multi = res("multi", Verdict.PASS).copy(
+            attackRounds = listOf(
+                AttackRound(1, "p1", "r1", refused = true),
+                AttackRound(2, "p2", "r2", refused = false)
+            )
+        )
+        val single = res("single", Verdict.PASS).copy(
+            attackRounds = listOf(AttackRound(1, "p1", "r1", refused = true))
+        )
+        val s = ReportSections.of(listOf(multi, single))
+
+        assertEquals("只有多步用例进演进视图", listOf("multi"), s.trailCases.map { it.testCase.id })
+        assertTrue(
+            "多步用例同时也在 passPlain 里 —— trailCases 不是第六路分区",
+            s.passPlain.any { it.testCase.id == "multi" }
+        )
+        assertEquals("trailCases 不得并进 total", 2, s.total)
+    }
+
+    @Test
+    fun `攻击演进视图按步数降序`() {
+        fun withRounds(id: String, n: Int) = res(id, Verdict.PASS).copy(
+            attackRounds = (1..n).map { AttackRound(it, "p$it", "r$it", refused = it < n) }
+        )
+        val s = ReportSections.of(listOf(withRounds("two", 2), withRounds("five", 5), withRounds("three", 3)))
+        // 步数多的排前面（报告页只画前 N 条，得先保住信息量最大的那批）。
+        assertEquals(listOf("five", "three", "two"), s.trailCases.map { it.testCase.id })
     }
 
     @Test

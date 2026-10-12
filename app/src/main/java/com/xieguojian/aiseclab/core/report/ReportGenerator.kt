@@ -111,6 +111,24 @@ object ReportGenerator {
             }
         }
 
+        // ── 攻击演进：多步用例的逐步破防情况 ──
+        // 独立成章，**不放进**「失守明细」：失守 0 条的模型同样有多步攻击记录，
+        // 挂在失守明细里就会随失守条数一起消失（2026-10-12 真机验证时抓到的导出 bug：
+        // 同一条 fixture 报告 App 页看得到时间轴、导出的 HTML 里却没有）。
+        // Markdown 画不了 SVG，用纯文本版：每步的轮次 + 是否破防。
+        val trailCases = sections.trailCases
+        if (trailCases.isNotEmpty()) {
+            append("## 攻击演进\n\n")
+            append("${ChartLegend.TIMELINE}\n\n")
+            trailCases.forEach { r ->
+                append("### ${r.testCase.dimension.label} · ${r.testCase.title}")
+                append("（${r.attackRounds.size} 步 · ${r.judgeResult.verdict}）\n\n")
+                append(r.attackRounds.joinToString(" → ") {
+                    "第${it.round}步" + if (it.refused) "未破防" else "**破防**"
+                } + "\n\n")
+            }
+        }
+
         append("## 失守明细\n\n")
         val fails = sections.fails
         if (fails.isEmpty()) {
@@ -129,13 +147,6 @@ object ReportGenerator {
             if (r.attackTrail.isNotEmpty()) {
                 append("- 攻击轨迹：\n")
                 r.attackTrail.forEach { append("  - $it\n") }
-            }
-            // 攻击演进：纯文本版的时间轴（每步的轮次 + 是否破防）。Markdown 画不了 SVG，
-            // 但信号不能死在数据结构里 —— 少了这一段，attackRounds 就只有 HTML 导出看得到。
-            if (r.attackRounds.isNotEmpty()) {
-                append("- 攻击演进：" + r.attackRounds.joinToString(" → ") {
-                    "第${it.round}步" + if (it.refused) "未破防" else "**破防**"
-                } + "\n")
             }
             append("\n")
         }
@@ -333,6 +344,21 @@ object ReportGenerator {
             }
         }
 
+        // ── 攻击演进：独立章节，理由同 Markdown 侧（挂进失守明细会在失守 0 条时整块消失）──
+        val trailCases = sections.trailCases
+        if (trailCases.isNotEmpty()) {
+            append("<h2>攻击演进</h2>")
+            append("<p class=\"meta\">").append(escapeHtml(ChartLegend.TIMELINE)).append("</p>")
+            trailCases.forEach { r ->
+                append("<div class=\"finding\"><b>${r.testCase.dimension.label} · ")
+                    .append(escapeHtml(r.testCase.title)).append("</b>")
+                append("<span class=\"meta\" style=\"margin-left:8px\">")
+                    .append(r.attackRounds.size).append(" 步 · ").append(r.judgeResult.verdict).append("</span>")
+                append("<div style=\"overflow-x:auto;margin-top:8px\">")
+                    .append(ChartSvg.timeline(r.attackRounds)).append("</div></div>")
+            }
+        }
+
         append("<h2>失守明细</h2>")
         val fails = sections.fails
         if (fails.isEmpty()) {
@@ -350,10 +376,6 @@ object ReportGenerator {
             if (r.judgeResult.disagreements.isNotEmpty()) append("<br>分歧记录：${r.judgeResult.disagreements.joinToString("；")}")
             if (r.attackTrail.isNotEmpty()) {
                 append("<br>攻击轨迹：<pre>${escapeHtml(r.attackTrail.joinToString("\n"))}</pre>")
-            }
-            val tl = ChartSvg.timeline(r.attackRounds)
-            if (tl.isNotEmpty()) {
-                append("<br>攻击演进：<br><div style=\"overflow-x:auto\">").append(tl).append("</div>")
             }
             append("</div>")
         }

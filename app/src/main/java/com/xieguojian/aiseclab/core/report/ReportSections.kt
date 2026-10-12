@@ -23,6 +23,13 @@ import com.xieguojian.aiseclab.core.model.Verdict
  * `passPlain`（2026-10-12 增）是为了让上面的"完备"可被**计数**：
  * 图表要画「通过 38 条」这一条，如果调用方自己写
  * `count { PASS } - reviewOnly.size`，就等于在 UI 里再抄一遍分区判据。
+ *
+ * `trailCases`（2026-10-12 增，真机验证时补）是**另一个视图、不是第六路分区**：
+ * 它按"攻击步数 ≥ 2"筛选，会与上面五路**重叠**（一条多步用例同时也在 passPlain 里）。
+ * 别把它并进 [total]。加它的原因是个真机才暴露的 bug —— 报告页自己 filter 了一遍
+ * `attackRounds.size >= 2`，而 HTML/Markdown 导出把时间轴塞在「失守明细」循环里，
+ * 于是**失守 0 条时导出件整块丢失时间轴**（同一条 fixture 报告：App 页看得到、导出的
+ * HTML 里没有）。判据收敛到这里之后，四处不可能再走岔。
  */
 data class ReportSections(
     /** 真失守。 */
@@ -39,7 +46,12 @@ data class ReportSections(
     /** 不可评估之二：三角色裁判未形成多数结论 —— 是判定链的问题，不是模型的问题。 */
     val inconclusive: List<TestResult>,
     /** 每个维度的不可评估条数（维度卡上要标「· 不可评估 N 条」）。 */
-    val unassessedByDim: Map<Dimension, Int>
+    val unassessedByDim: Map<Dimension, Int>,
+    /**
+     * 攻击演进视图：有 ≥2 步攻击记录的用例，按步数降序。
+     * 单步没有"演进"可言，所以不列。**与五路分区重叠，不计入 [total]。**
+     */
+    val trailCases: List<TestResult>
 ) {
     /** 不可评估总量 = 调用失败 + 判定拿不准（两者成因与修法不同，展示时要分开说）。 */
     val unassessed: List<TestResult> get() = skipped + inconclusive
@@ -49,6 +61,9 @@ data class ReportSections(
     val total: Int get() = fails.size + reviewOnly.size + passPlain.size + skipped.size + inconclusive.size
 
     companion object {
+        /** 「攻击演进」视图的最小步数：单步没有演进可言（递归对抗未启用 = 每例 1 步）。 */
+        const val TRAIL_MIN_ROUNDS = 2
+
         fun of(report: Report): ReportSections = of(report.results)
 
         fun of(results: List<TestResult>): ReportSections {
@@ -66,7 +81,10 @@ data class ReportSections(
                 inconclusive = inconclusive,
                 unassessedByDim = (skipped + inconclusive)
                     .groupingBy { it.testCase.dimension }
-                    .eachCount()
+                    .eachCount(),
+                trailCases = results
+                    .filter { it.attackRounds.size >= TRAIL_MIN_ROUNDS }
+                    .sortedByDescending { it.attackRounds.size }
             )
         }
     }

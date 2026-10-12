@@ -11,9 +11,11 @@ import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.TestCase
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
+import com.xieguojian.aiseclab.core.report.ChartLegend
 import com.xieguojian.aiseclab.core.report.ChartPalette
 import com.xieguojian.aiseclab.core.report.ChartSvg
 import com.xieguojian.aiseclab.core.report.ReportGenerator
+import com.xieguojian.aiseclab.core.report.ReportSections
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -136,7 +138,7 @@ class ReportChartTest {
         assertTrue("热力图章节没出现", html.contains("用例热力图"))
         assertTrue("分区分布章节没出现", html.contains("分区分布"))
         assertTrue("判定层级章节没出现", html.contains("判定层级分布"))
-        assertTrue("失守用例的攻击演进没进 HTML", html.contains("攻击演进"))
+        assertTrue("攻击演进章节没进 HTML", html.contains("<h2>攻击演进</h2>"))
         assertFalse("导出件不许依赖外部脚本（审计存档要离线能看）", html.contains("<script"))
         assertFalse("导出件不许依赖外部 CDN", html.contains("http://cdn"))
     }
@@ -153,9 +155,49 @@ class ReportChartTest {
             )
         )
         val md = ReportGenerator.toMarkdown(r)
-        assertTrue("Markdown 里没有攻击演进行", md.contains("- 攻击演进："))
+        assertTrue("Markdown 里没有攻击演进章节", md.contains("## 攻击演进"))
         assertTrue("破防那一步没被标出来", md.contains("第2步**破防**"))
         assertTrue("未破防那一步没被标出来", md.contains("第1步未破防"))
+    }
+
+    @Test
+    fun `失守为0条时导出仍要带攻击演进_不能跟着失守明细一起消失`() {
+        // 真机验证（2026-10-12）抓到的导出 bug：时间轴原本挂在「失守明细」循环里，
+        // 于是一个**全部通过**的模型（失守 0 条）导出的 HTML / Markdown 里，
+        // 那几条多步攻击记录整块消失 —— 而 App 报告页有独立的「攻击演进」区块，看得到。
+        // 同一份数据、两种形态不一致，且只有「失守 0 条 + 存在多步用例」这个组合才触发。
+        val r = report(
+            res(
+                "ok-multi", Verdict.PASS,
+                rounds = listOf(
+                    AttackRound(1, "p1", "r1", refused = true),
+                    AttackRound(2, "p2", "r2", refused = false)
+                )
+            ),
+            res("ok-single", Verdict.PASS)
+        )
+        assertTrue("前提：这条报告没有失守用例", ReportSections.of(r).fails.isEmpty())
+
+        val html = ReportGenerator.toHtml(r)
+        assertTrue("失守 0 条时 HTML 丢了攻击演进章节", html.contains("<h2>攻击演进</h2>"))
+        assertTrue("时间轴 SVG 没进 HTML", html.contains("攻击演进时间轴"))
+
+        val md = ReportGenerator.toMarkdown(r)
+        assertTrue("失守 0 条时 Markdown 丢了攻击演进章节", md.contains("## 攻击演进"))
+        assertTrue("破防那一步没被标出来", md.contains("第2步**破防**"))
+        assertFalse("单步用例不该被画进「演进」（没演进可言）", md.contains("ok-single"))
+    }
+
+    @Test
+    fun `图例文案不得含Markdown标记_Compose不解析会原样显示星号`() {
+        // 真机踩过：图例复用了 Markdown 的 **粗体**，Compose 的 Text 不解析 Markdown，
+        // 界面上直接显示成 `这是**用例级**粒度`。同一条字符串也给 HTML 导出用，
+        // 而导出里是被 escape 的，所以两处都错、且只有肉眼能发现 —— 用断言钉住。
+        listOf(ChartLegend.HEATMAP, ChartLegend.TIMELINE, ChartLegend.TIMELINE_EMPTY, ChartLegend.BARS)
+            .forEach { s ->
+                assertFalse("图例里出现了 Markdown 粗体标记（真机会原样显示星号）：$s", s.contains("**"))
+                assertFalse("图例里出现了 Markdown 链接标记：$s", s.contains("]("))
+            }
     }
 
     @Test
@@ -166,6 +208,6 @@ class ReportChartTest {
         assertTrue(html.contains("用例热力图"))
         assertFalse("没有步进数据就不该出现攻击演进章节", html.contains("攻击演进"))
         val md = ReportGenerator.toMarkdown(r)
-        assertFalse(md.contains("- 攻击演进："))
+        assertFalse(md.contains("## 攻击演进"))
     }
 }

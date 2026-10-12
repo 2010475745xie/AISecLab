@@ -113,11 +113,11 @@ fun ReportScreen(
 
     // 攻击演进：只列 ≥2 步的用例、按步数降序。单步没有"演进"可言，
     // 50 条全画又会让报告长出好几屏（手机上尤其）。
+    // 判据收敛在 ReportSections.trailCases —— 报告页与导出两处必须同源
+    //（这里过去自己 filter，而导出侧把时间轴塞在失守明细里 → 失守 0 条时导出件丢图，真机抓到）。
     // ⚠️ 必须在 LazyColumn **外面**算：里面是 LazyListScope、不是 @Composable 上下文，
     // 在那儿调 remember 直接编译不过（2026-10-12 踩过）。
-    val trailCases = report.results
-        .filter { it.attackRounds.size >= 2 }
-        .sortedByDescending { it.attackRounds.size }
+    val trailCases = sections.trailCases
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
