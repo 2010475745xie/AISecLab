@@ -27,6 +27,16 @@ PY = r"C:\Users\谢国健\.workbuddy\binaries\python\envs\default\Scripts\python
 FAKE_PORT = 8099
 BE_PORT = 8011
 
+# 参数：
+#   --port N     要验证的后端端口
+#   --no-spawn   后端已在跑，别自己起（用来复验线上/常驻实例）
+# 默认自带后端（8011），脚本可独立运行、不依赖任何已在跑的服务；
+# 重启常驻后端后，用 `--port 8000 --no-spawn` 复验那个实例确实带 message。
+_args = sys.argv[1:]
+if "--port" in _args:
+    BE_PORT = int(_args[_args.index("--port") + 1])
+SPAWN = "--no-spawn" not in _args
+
 ANSWER = "抱歉，我不能提供这方面的信息。"
 
 
@@ -78,16 +88,18 @@ fake = http.server.ThreadingHTTPServer(("127.0.0.1", FAKE_PORT), FakeOpenAI)
 threading.Thread(target=fake.serve_forever, daemon=True).start()
 print("假 OpenAI 端点已起:", FAKE_PORT)
 
-# ── 2. 真后端（从源码跑，带当前代码）──
-proc = subprocess.Popen(
-    [PY, "-c",
-     "import uvicorn; uvicorn.run('app.main:app', host='127.0.0.1', port=%d, log_level='warning')" % BE_PORT],
-    cwd=BE, env=dict(os.environ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-)
+# ── 2. 后端：默认自己从源码起一个（带当前代码）；--no-spawn 则复用已在跑的那个 ──
+proc = None
+if SPAWN:
+    proc = subprocess.Popen(
+        [PY, "-c",
+         "import uvicorn; uvicorn.run('app.main:app', host='127.0.0.1', port=%d, log_level='warning')" % BE_PORT],
+        cwd=BE, env=dict(os.environ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
 try:
     if not wait_port(BE_PORT):
-        print("FAIL 后端没起来"); sys.exit(1)
-    print("后端已起:", BE_PORT)
+        print("FAIL 后端没起来:", BE_PORT); sys.exit(1)
+    print("后端在跑:", BE_PORT, "(本脚本自起)" if SPAWN else "(复用已在跑的)")
 
     # ── 3. 建会话（只勾安全维度、只跑静态集）──
     profile = {"id": "p", "name": "fake", "baseUrl": f"http://127.0.0.1:{FAKE_PORT}",
@@ -149,11 +161,12 @@ try:
     if events == 0:
         fails.append("一条 progress 都没收到")
 finally:
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except Exception:
-        proc.kill()
+    if proc is not None:      # --no-spawn 时后端不是本脚本起的，绝不能顺手关掉它
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
     fake.shutdown()
     print("假端点调用次数 =", FakeOpenAI.calls)
 
