@@ -40,6 +40,7 @@ import com.xieguojian.aiseclab.core.report.ChartLegend
 import com.xieguojian.aiseclab.core.report.ChartPalette
 import com.xieguojian.aiseclab.core.report.ErosionAnalysis
 import com.xieguojian.aiseclab.core.report.ErosionCurve
+import com.xieguojian.aiseclab.core.report.HardeningAdvisor
 import com.xieguojian.aiseclab.core.report.SafetyMetrics
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.chart.BarItem
@@ -137,6 +138,12 @@ fun ReportScreen(
     // 取值格式与口径文案全部来自 SafetyMetrics.rows()，与两个导出件同源 ——
     // 「界面说 27%、导出说 0.27」这类不一致只有肉眼能发现，所以不给它发生的机会。
     val metrics = remember(report, erosion) { SafetyMetrics.of(report.results, erosion) }
+
+    // 加固建议（方案 §3.5）：取证闭环的最后一问「怎么修」。
+    // 只对**失守**用例出（通过的用例没有要修的东西），且归因判据与上面的指标面板**同源**
+    // （都走 core/report/DefenseAttribution.kt）—— 否则会出现"指标面板说规划层失效、
+    // 加固建议却让人去改输出过滤"这种自相矛盾的报告，答辩被追问是硬伤。
+    val hardening = remember(report) { HardeningAdvisor.advise(sections.fails) }
 
     LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
         item {
@@ -259,6 +266,25 @@ fun ReportScreen(
                     }
                 }
             }
+        }
+
+        // ── 加固建议（方案 §3.5）：取证闭环的最后一问「怎么修」──
+        // 只对**失守**用例出（通过的用例没有要修的东西）。归因判据与上面的安全指标面板
+        // **同源**（都走 core/report/DefenseAttribution.kt）—— 否则会出现"指标面板说规划层失效、
+        // 这里却让人去改输出过滤"的自相矛盾报告，答辩被追问是硬伤。
+        // 放在安全指标之后、图表之前：报告先回答"多危险、哪层先垮"，紧接着回答"那我怎么改"。
+        if (!hardening.isEmpty) {
+            item {
+                Spacer(Modifier.height(20.dp))
+                Text("加固建议", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "按「攻击手法 × 先失效的护栏层」聚合，按中招条数降序 —— 第一条就是该先修的。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            item { HardeningPanel(hardening) }
         }
 
         // ── 图表：用例矩阵 / 分区分布 / 判定层级 ──
@@ -694,6 +720,69 @@ private fun ErosionRow(c: ErosionCurve) {
 
 /** 分位数显示：null = 该族一条都没破防 → `--`（不能显示 0.0）。 */
 private fun oneDecimal(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
+
+/**
+ * 加固建议面板（方案 §3.5）：取证闭环的最后一问「怎么修」。
+ *
+ * 取数全部来自 [HardeningAdvisor]（报告页 / Markdown / HTML 三处同源），这里只负责排版。
+ * 一条建议 = 一个「攻击手法 × 先失效护栏层」组合，右上角的**中招条数**同时是排序依据 ——
+ * 排最前的就是该先修的那条。
+ *
+ * ⚠️ 建议文本里**不能出现 Markdown 标记**（`**` 之类）：Compose 的 Text 不解析 Markdown，
+ * 写进去会原样显示成星号。有单测钉住（HardeningAdvisorTest 的「建议文本不含 Markdown 标记」）。
+ */
+@Composable
+private fun HardeningPanel(hardening: HardeningAdvisor.HardeningReport) {
+    Column {
+        hardening.items.forEach { item -> HardeningCard(item) }
+        // 定位不出失效层的条数必须单独说，不能静默吞掉：那是「没测到」，不是「没有」。
+        if (hardening.unattributed > 0) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "另有 ${hardening.unattributed} 条失守没能定位到失效层（没有逐轮记录），上面的建议" +
+                    "只到策略级。跑多轮（配辅助模型 + 打开递归对抗）才能拿到分层归因。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 单条加固建议：手法 + 中招数 + 失效层 + 可执行动作 +（可选）可直接粘的提示片段。 */
+@Composable
+private fun HardeningCard(item: HardeningAdvisor.HardeningItem) {
+    Card(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(item.strategy.label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(
+                    "${item.cases} 条中招",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            // 层徽标：只有真定位出来了才画。定位不出时写「不可归因」——
+            // 绝不默认塞一层，那正是「拿没测到当测出来」的同一种错。
+            Text(
+                item.layer?.let { "先失效：${it.label}" } ?: "先失效层不可归因",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (item.hasLayer) Color(0xFFD85A30) else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(item.action, style = MaterialTheme.typography.bodyMedium)
+            item.snippet?.let { s ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "可直接粘进系统提示：",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(s, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
 
 /**
  * 安全指标面板：一条指标一张小卡（名称 / 取值 / 口径）。

@@ -91,6 +91,27 @@ object ReportGenerator {
             }
         }
 
+        // ── 加固建议（方案 §3.5）：取证闭环的最后一问「怎么修」──
+        // 与报告页 / HTML 导出同源（HardeningAdvisor），归因判据走 DefenseAttribution ——
+        // 与上面「安全指标」的失效层是**同一份实现**，避免两处对同一条用例给出相反归因。
+        // ⚠️ 它刻意**不是** LLM 现场生成的：建议必须可复现、可证伪，否则取证报告没有可信度。
+        val hardening = HardeningAdvisor.advise(sections.fails)
+        if (!hardening.isEmpty) {
+            append("## 加固建议\n\n")
+            append("按「攻击手法 × 先失效的护栏层」聚合，**按中招条数降序** —— 第一条就是该先修的。\n\n")
+            hardening.items.forEach { item ->
+                append("### ${item.strategy.label}（${item.cases} 条中招")
+                append(item.layer?.let { " · 先失效：${it.label}" } ?: " · 定位不出失效层")
+                append("）\n\n")
+                append("${item.action}\n\n")
+                item.snippet?.let { append("可直接粘进系统提示：\n\n> $it\n\n") }
+            }
+            if (hardening.unattributed > 0) {
+                append("> 另有 ${hardening.unattributed} 条失守没能定位到失效层（没有逐轮记录），")
+                append("上述建议只到策略级；跑多轮（配辅助模型 + 打开递归对抗）才能拿到分层归因。\n\n")
+            }
+        }
+
         // ── 基线对比章节（选了基线才有）──
         if (diff != null) {
             append("## 基线对比\n\n")
@@ -282,6 +303,8 @@ object ReportGenerator {
         append(".meta{color:#555;font-size:14px}")
         append(".finding{border-left:3px solid ").append(riskColor).append(";background:#fafafa;padding:10px 14px;margin:10px 0;border-radius:4px}")
         append(".skipped{border-left:3px solid #ccc;background:#fafafa;padding:10px 14px;margin:10px 0;border-radius:4px;color:#555}")
+        // 加固建议用绿色左边框：它是「该做什么」的行动项，与红色的失守告警在视觉上分开。
+        append(".hardening{border-left:3px solid #1D9E75;background:#f5fbf8;padding:10px 14px;margin:10px 0;border-radius:4px}")
         append("pre{background:#f5f5f5;padding:10px;border-radius:6px;overflow-x:auto;white-space:pre-wrap}")
         append(".tag{display:inline-block;padding:2px 8px;border-radius:4px;background:").append(riskColor).append(";color:#fff;font-size:12px;margin-left:8px}")
         append("</style></head><body>")
@@ -371,6 +394,29 @@ object ReportGenerator {
                     append("</tr>")
                 }
                 append("</table></div>")
+            }
+        }
+
+        // ── 加固建议（方案 §3.5）：与报告页 / Markdown 同源（HardeningAdvisor）──
+        val hardening = HardeningAdvisor.advise(sections.fails)
+        if (!hardening.isEmpty) {
+            append("<h2>加固建议</h2>")
+            append("<p class=\"meta\">按「攻击手法 × 先失效的护栏层」聚合，按中招条数降序 —— 第一条就是该先修的。</p>")
+            hardening.items.forEach { item ->
+                append("<div class=\"hardening\"><b>${escapeHtml(item.strategy.label)}</b>")
+                append("<span class=\"meta\" style=\"margin-left:8px\">${item.cases} 条中招 · ")
+                append(escapeHtml(item.layer?.let { "先失效：${it.label}" } ?: "先失效层不可归因"))
+                append("</span>")
+                append("<div style=\"margin-top:6px\">${escapeHtml(item.action)}</div>")
+                item.snippet?.let {
+                    append("<div style=\"margin-top:6px\"><span class=\"meta\">可直接粘进系统提示：</span>")
+                    append("<pre>${escapeHtml(it)}</pre></div>")
+                }
+                append("</div>")
+            }
+            if (hardening.unattributed > 0) {
+                append("<p class=\"meta\">另有 ${hardening.unattributed} 条失守没能定位到失效层（没有逐轮记录），")
+                append("上述建议只到策略级。</p>")
             }
         }
 

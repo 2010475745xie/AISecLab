@@ -478,28 +478,17 @@ data class SafetyMetrics(
         /**
          * 分层归因（互斥、可复算）：多步才破 → 规划层；一次就破 → 输出层。
          * 输入层/工具层不可观测，**不产出条目**（见类注释第 3 条）。
+         *
+         * 判据本身收敛在 [DefenseAttribution] —— 加固建议（§3.5）也用同一份，
+         * 否则会出现「指标面板说规划层、加固建议让改输出过滤」这种自相矛盾的报告。
          */
-        private fun layersOf(failed: List<TestResult>): List<LayerFailure> {
-            var planning = 0
-            var output = 0
-            failed.forEach { r ->
-                // 破防步 = 首个「该轮回答里没有拒绝话术」的轮次。
-                // 定位不出来 = 这条用例**不可归因**（没有逐轮记录，或逐轮全程都显示有拒绝）——
-                // 绝不默认塞进输出层：那是拿「没测到」当「测出来是输出层失效」。
-                val firstBroke = r.attackRounds.firstOrNull { !it.refused }?.round
-                if (firstBroke == null) {
-                    Unit
-                } else if (firstBroke >= ErosionAnalysis.MIN_TURNS) {
-                    planning++
-                } else {
-                    output++
-                }
-            }
-            return listOf(
-                LayerFailure(DefenseLayer.PLANNING, planning),
-                LayerFailure(DefenseLayer.OUTPUT, output)
-            ).filter { it.count > 0 }.sortedBy { it.layer.ordinal }
-        }
+        private fun layersOf(failed: List<TestResult>): List<LayerFailure> =
+            failed
+                .mapNotNull { DefenseAttribution.layerOf(it) }
+                .groupingBy { it }
+                .eachCount()
+                .map { (layer, n) -> LayerFailure(layer, n) }
+                .sortedBy { it.layer.ordinal }
 
         private fun pct(v: Float?): String = v?.let { "%.0f%%".format(it * 100) } ?: "--"
 
