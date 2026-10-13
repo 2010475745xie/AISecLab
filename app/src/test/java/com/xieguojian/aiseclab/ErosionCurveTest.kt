@@ -324,10 +324,16 @@ class ErosionCurveTest {
     }
 
     @Test
-    fun `无多步数据时不出侵蚀章节`() {
+    fun `无多步数据时侵蚀章节仍成章并说明没采集`() {
+        // 2026-10-13 真机跑完改的：以前 multiStepTotal == 0 时整章不写，
+        // 一次「本机跑、未开递归对抗」的真实运行里侵蚀块静默消失 ——
+        // 读者不知道"为什么没有"。而「本次没采集多步证据」本身就是要写进审计报告的结论。
         val r = report(res("a", Verdict.FAIL))
-        assertFalse("单步用例不该带出侵蚀章节", ReportGenerator.toMarkdown(r).contains("## 多轮侵蚀"))
-        assertFalse(ReportGenerator.toHtml(r).contains("多轮侵蚀"))
+        val md = ReportGenerator.toMarkdown(r)
+        assertTrue("没多步数据也要成章", md.contains("## 多轮侵蚀"))
+        assertTrue("必须直说是「没采集」", md.contains("一条多步攻击记录都没有"))
+        assertFalse("不许把它说成「有记录但评估失败」", md.contains("全部不可评估"))
+        assertTrue(ReportGenerator.toHtml(r).contains("<h2>多轮侵蚀</h2>"))
     }
 
     @Test

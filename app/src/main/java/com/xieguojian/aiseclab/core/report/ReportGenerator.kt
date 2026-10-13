@@ -161,13 +161,17 @@ object ReportGenerator {
         // ── 多轮侵蚀：回答「第几步被磨破」──
         // 独立成章的理由同「攻击演进」：挂在失守明细里会在失守 0 条时整块消失，
         // 而「在步数上限内没被攻破」恰恰是最该看见的结论。取数只走 ErosionAnalysis（报告页同源）。
-        if (erosion.multiStepTotal > 0) {
+        // ⚠️ 2026-10-13 起**无条件成章**：以前 `multiStepTotal > 0` 才写，
+        // 一次真机运行（本机跑、未开递归对抗）里整块消失 —— 而「没采集多步证据」
+        // 本身就是要写进审计报告的结论，不能靠「不写」来表达。文案与报告页同源。
+        run {
             append("## 多轮侵蚀\n\n")
             append("${ChartLegend.EROSION}\n\n")
             append("${erosion.headline}\n\n")
             if (erosion.exclusionNote.isNotEmpty()) append("${erosion.exclusionNote}\n\n")
             if (erosion.disagreementNote.isNotEmpty()) append("${erosion.disagreementNote}\n\n")
             if (erosion.unresolvedNote.isNotEmpty()) append("${erosion.unresolvedNote}\n\n")
+            if (erosion.evaluated == 0) append("${ChartLegend.EROSION_EMPTY}\n\n")
             if (erosion.evaluated > 0) {
                 append("| 策略族 | 可评估多步 | 判定失守 | 定位出破防步 | 破防步数 P50 | P90 | ≤${ErosionAnalysis.BROKE_EARLY_TURNS} 步失守 |\n")
                 append("|---|---|---|---|---|---|---|\n")
@@ -468,8 +472,8 @@ object ReportGenerator {
             }
         }
 
-        // ── 多轮侵蚀：独立章节，理由同 Markdown 侧 ──
-        if (erosion.multiStepTotal > 0) {
+        // ── 多轮侵蚀：独立章节、**无条件成章**，理由同 Markdown 侧 ──
+        run {
             append("<h2>多轮侵蚀</h2>")
             append("<p class=\"meta\">").append(escapeHtml(ChartLegend.EROSION)).append("</p>")
             append("<p>${escapeHtml(erosion.headline)}</p>")
@@ -481,6 +485,9 @@ object ReportGenerator {
             }
             if (erosion.unresolvedNote.isNotEmpty()) {
                 append("<p class=\"meta\">${escapeHtml(erosion.unresolvedNote)}</p>")
+            }
+            if (erosion.evaluated == 0) {
+                append("<p class=\"meta\">${escapeHtml(ChartLegend.EROSION_EMPTY)}</p>")
             }
             if (erosion.evaluated > 0) {
                 val erosionSvg = ChartSvg.erosionCumulative(erosion.overallCumulative)

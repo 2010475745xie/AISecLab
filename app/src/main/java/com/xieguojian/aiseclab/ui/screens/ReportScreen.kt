@@ -461,50 +461,52 @@ fun ReportScreen(
         // ── 多轮侵蚀曲线 ──
         // 与「攻击演进」的分工：演进看**单条用例**逐步发生了什么，侵蚀看**跨用例**
         // 「第几步被磨破」。两者都只在多步记录存在时才有意义，所以共享同一个 2 步门槛。
-        if (erosion.multiStepTotal > 0) {
-            item {
-                Spacer(Modifier.height(20.dp))
-                Text("多轮侵蚀", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    ChartLegend.EROSION,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(erosion.headline, style = MaterialTheme.typography.bodyMedium)
-                // 两条「信号不一致」的说明必须跟着 headline 显示：
-                // 它们是「失守 0 条」与「某步无拒绝话术」同时出现时的解释，
-                // 不显示的话读者只会认为报告在瞎算（真机验证时就是这么撞上的）。
-                listOf(erosion.exclusionNote, erosion.disagreementNote, erosion.unresolvedNote)
-                    .filter { it.isNotEmpty() }
-                    .forEach {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-            }
-            if (erosion.evaluated > 0) {
-                item {
-                    Spacer(Modifier.height(10.dp))
-                    ErosionTrack(erosion)
-                }
-                item {
-                    Spacer(Modifier.height(12.dp))
-                    ErosionTable(erosion)
-                }
-            } else {
-                item {
+        //
+        // ⚠️ 2026-10-13 起**无条件渲染**：以前是 `multiStepTotal > 0` 才显示，
+        // 结果一次真机运行（本机跑、没开递归对抗）里侵蚀整块静默消失 ——
+        // 而「本次没采集多步证据」本身就是审计要看见的结论，不能靠「不显示」来表达。
+        item {
+            Spacer(Modifier.height(20.dp))
+            Text("多轮侵蚀", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                ChartLegend.EROSION,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(erosion.headline, style = MaterialTheme.typography.bodyMedium)
+            // 两条「信号不一致」的说明必须跟着 headline 显示：
+            // 它们是「失守 0 条」与「某步无拒绝话术」同时出现时的解释，
+            // 不显示的话读者只会认为报告在瞎算（真机验证时就是这么撞上的）。
+            listOf(erosion.exclusionNote, erosion.disagreementNote, erosion.unresolvedNote)
+                .filter { it.isNotEmpty() }
+                .forEach {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        ChartLegend.EROSION_EMPTY,
+                        it,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+        }
+        if (erosion.evaluated > 0) {
+            item {
+                Spacer(Modifier.height(10.dp))
+                ErosionTrack(erosion)
+            }
+            item {
+                Spacer(Modifier.height(12.dp))
+                ErosionTable(erosion)
+            }
+        } else {
+            item {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    ChartLegend.EROSION_EMPTY,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -715,7 +717,13 @@ private fun MetricsPanel(metrics: SafetyMetrics) {
  * 而**截断的标签在 `uiautomator dump` 里仍是完整的**，只有截图能发现（报告页踩过）。
  * 改成一族一块、族内一行一个意图，条形长度 = 该意图下的 ASR（右侧数字即百分比）。
  *
- * ⚠️ 每族的条形在**族内**归一化 —— 跨族比长短没有意义，要比就看数字。
+ * ⚠️ 两条 2026-10-13 真机跑完才定下来的规矩：
+ * 1. **条形按绝对刻度画（[MiniBar] 的 `scaleMax = 100`），不做族内归一化。**
+ *    原先按族内最大值归一化，于是「25%（该族最差的一格，颜色是绿色）」被画成满格 ——
+ *    长度说「本族最大」、颜色说「很好」，两套语义叠在同一根条上，读不出结论。
+ * 2. **没样本的意图也要占一行并显示 `--`。** [SafetyMetrics.cellsOf] 现在补齐全部意图，
+ *    漏掉的话「没测到」在这套行式布局里会退化成「整行消失」，
+ *    而图例却写着「空着的格子 = 没测到」—— 手机上根本没有对应物。
  */
 @Composable
 private fun StrategyIntentMatrix(metrics: SafetyMetrics) {
@@ -724,21 +732,24 @@ private fun StrategyIntentMatrix(metrics: SafetyMetrics) {
             Text(st.label, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
             MiniBar(
-                metrics.cellsOf(st).map { c ->
-                    val asr = c.asr ?: 0f
+                items = metrics.cellsOf(st).map { c ->
+                    val asr = c.asr
+                    val pct = asr?.let { (it * 100).roundToInt() }
                     BarItem(
-                        c.intent.label,
-                        // 矩阵里的格都带可评估样本，asr 不会是 null；兜底成 0 只是为了类型
-                        (asr * 100).roundToInt(),
-                        // 颜色按 ASR 取，绿→红；不能一律涂红 —— 0% 是好事
-                        ChartPalette.asrColor(asr)
+                        label = c.intent.label,
+                        // 没样本时 value 兜底 0（条长为空），但**文字必须给 `--`** ——
+                        // 显示 0% 会被读成「试过了、这招不管用」，而事实是「没测过」。
+                        value = pct ?: 0,
+                        color = if (asr == null) ChartPalette.SKIPPED else ChartPalette.asrColor(asr),
+                        text = pct?.let { "$it%" } ?: "--"
                     )
-                }
+                },
+                scaleMax = 100
             )
             Spacer(Modifier.height(12.dp))
         }
         Text(
-            "条形长度只在本族内归一化，跨族比长短没有意义；看右侧数字（ASR 百分比）。",
+            "条长 = ASR 绝对值（0~100%），与颜色同一把尺；「--」= 该组合没有可评估样本（没测到），不是 0%。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
