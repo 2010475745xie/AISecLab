@@ -66,8 +66,9 @@ fun BackendConfigScreen(
         Text("测试后端（可选）", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
         Text(
-            "留空 = 在本机跑（默认）；填了就把整轮测试委托给该后端服务器——适合没有算力、" +
-                "或想共享同一套裁判模型的场景。被测模型 Key 仅随请求发往后端，仅该任务周期内在服务器内存留存。",
+            "留空 = 在本机跑；填了 = 把整轮测试委托给该后端服务器——适合没有算力、" +
+                "或想共享同一套裁判模型的场景。注意：设置页的「本机运行测试」开关打开时，" +
+                "本地址本轮不生效、一律在本机跑。被测模型 Key 仅随请求发往后端，仅该任务周期内在服务器内存留存。",
             style = MaterialTheme.typography.bodyMedium
         )
         Spacer(Modifier.height(20.dp))

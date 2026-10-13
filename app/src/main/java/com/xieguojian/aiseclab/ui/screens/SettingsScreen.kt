@@ -65,8 +65,9 @@ fun SettingsScreen(
                     Text("本机运行测试", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "默认关闭。关闭时未填后端地址就不允许开测——端上跑没有多次采样稳定性保护，" +
-                            "单次采样定论，结果可能不稳。开启后恢复「后端地址留空即在端上跑」。",
+                        "默认关闭。关闭时：填了后端地址就委托后端跑，没填则不允许开测" +
+                            "（端上跑没有多次采样稳定性保护，单次采样定论、结果可能不稳）。" +
+                            "开启后：所有测试都在本机跑，已填的后端地址本轮不生效。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

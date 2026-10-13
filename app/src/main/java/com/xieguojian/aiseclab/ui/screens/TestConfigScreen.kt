@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.engine.modules.ConsistencyModule
 import com.xieguojian.aiseclab.core.engine.modules.FactualityModule
 import com.xieguojian.aiseclab.core.engine.modules.JailbreakVariantsModule
@@ -37,6 +38,7 @@ import com.xieguojian.aiseclab.core.engine.modules.RobustnessModule
 import com.xieguojian.aiseclab.core.engine.modules.SecurityModule
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.RoleSource
+import com.xieguojian.aiseclab.core.resolveRunMode
 import com.xieguojian.aiseclab.ui.TestViewModel
 
 @Composable
@@ -180,21 +182,45 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         )
 
         Spacer(Modifier.height(16.dp))
-        if (backendUrl.isNotBlank()) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "🖥 本轮测试将委托后端运行：$backendUrl（被测 Key 仅随请求发往后端，仅该任务周期内在服务器内存留存）",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodySmall
-            )
-        } else if (!localRun) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "⚠ 未配置测试后端，且「本机运行测试」已关闭（设置页可开启）。\n" +
-                    "端上跑缺少多次采样稳定性保护，默认不启用；请先到设置 → 测试后端填写地址并测试连通性。",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
+        // 运行位置：与 TestRunService 的分支同源（core/RunMode.kt），别再各写一遍判据。
+        // 开关打开时本机优先、忽略已填地址 —— 否则地址填过一次就再也回不到本机跑。
+        when (resolveRunMode(backendUrl, localRun)) {
+            RunMode.BACKEND -> {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "🖥 本轮测试将委托后端运行：$backendUrl（被测 Key 仅随请求发往后端，仅该任务周期内在服务器内存留存）",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            RunMode.LOCAL -> {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "💻 本轮在本机运行：" +
+                        (if (backendUrl.isNotBlank())
+                            "设置页的「本机运行测试」已开启，已填的后端地址本轮不生效（想改走后端就关掉该开关）。"
+                        else "未配置测试后端，由端上直接跑。"),
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "端上跑没有多次采样稳定性保护（单次采样定论、方差无人兜底），" +
+                        "也不采集逐轮对抗记录，所以报告里的「多轮侵蚀 / 破防步数 / 分层归因」会是空的。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            null -> {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "⚠ 未配置测试后端，且「本机运行测试」已关闭（设置页可开启）。\n" +
+                        "端上跑缺少多次采样稳定性保护，默认不启用；请先到设置 → 测试后端填写地址并测试连通性，" +
+                        "或在设置里开启「本机运行测试」。",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
 
         Spacer(Modifier.height(24.dp))
@@ -228,7 +254,7 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                         },
                         enabled = selected.isNotEmpty() &&
                             state !is TestViewModel.TestState.Running &&
-                            (backendUrl.isNotBlank() || localRun)
+                            resolveRunMode(backendUrl, localRun) != null
                     ) { Text("开始测试") }
                 }
             }

@@ -12,7 +12,9 @@ import android.os.Build
 import android.os.PowerManager
 import android.os.PowerManager.PARTIAL_WAKE_LOCK
 import androidx.core.app.NotificationCompat
+import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.TestSession
+import com.xieguojian.aiseclab.core.resolveRunMode
 import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.core.model.AuxModelProfile
@@ -84,11 +86,27 @@ class TestRunService : Service() {
         val guard = repo.loadGuard()
         val roleSource = repo.loadRoleSource()
 
-        // ── 后端模式：整轮测试委托给服务器跑（地址在设置里填，空 = 本地模式）──
+        // ── 后端模式：整轮测试委托给服务器跑（开关关闭且地址非空时走这里）──
         // 裁判模型也由客户端带来（BYOK）：比赛/共享服务器通常不预置裁判模型。
         // 解析口径与端上 TestSession.resolveEndpoint 一致：AUX=用辅助，TARGET=用目标，AUTO=有辅助用辅助否则目标。
         val backendUrl = repo.loadBackendUrl()
-        if (backendUrl.isNotBlank()) {
+        // 运行位置由唯一口径解析（core/RunMode.kt）：开关打开 = 本机（忽略地址）、
+        // 开关关闭且地址非空 = 后端、两者都没配 = 不允许开测。
+        // UI 侧（TestConfigScreen 的按钮可用性与提示）调的是同一个函数，别再各写一遍判据。
+        val runMode = resolveRunMode(backendUrl, repo.loadLocalRunEnabled())
+        if (runMode == null) {
+            startForeground(NOTIF_ID, buildNotification("未能开始"))
+            TestRunStateHolder.appendLog("✗ 未能开始：未配置测试后端，且「本机运行测试」已关闭")
+            TestRunStateHolder.update(
+                TestViewModel.TestState.Error(
+                    "未配置测试后端，且「本机运行测试」已关闭。请在设置 → 测试后端填写地址，或在设置里开启本机运行测试。"
+                )
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_REDELIVER_INTENT
+        }
+        if (runMode == RunMode.BACKEND) {
             val judgeProfile = when (roleSource) {
                 RoleSource.TARGET -> target
                 RoleSource.AUX -> aux?.asModelProfile() ?: target
@@ -151,22 +169,7 @@ class TestRunService : Service() {
             return START_REDELIVER_INTENT
         }
 
-        // 既没配后端、又关着「本机运行测试」→ 不允许开测（这是默认状态）。
-        // 端上跑没有后端的多次采样/稳定性保护，单次采样定论方差无人兜底，所以默认拦住。
-        if (!repo.loadLocalRunEnabled()) {
-            startForeground(NOTIF_ID, buildNotification("未能开始"))
-            TestRunStateHolder.appendLog("✗ 未能开始：未配置测试后端，且「本机运行测试」已关闭")
-            TestRunStateHolder.update(
-                TestViewModel.TestState.Error(
-                    "未配置测试后端，且「本机运行测试」已关闭。请在设置 → 测试后端填写地址，或在设置里开启本机运行测试。"
-                )
-            )
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_REDELIVER_INTENT
-        }
-
-        // ── 本地模式：端上直接跑（需「本机运行测试」开关打开）──
+        // ── 本地模式：端上直接跑（runMode == LOCAL）──
         // 必须在 onStartCommand 返回前 5s 内调用 startForeground，否则 Android 14 直接 ANR/崩溃
         startForeground(NOTIF_ID, buildNotification("准备中…"))
         acquireWakeLock()

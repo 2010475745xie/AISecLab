@@ -100,9 +100,14 @@ class ProfileRepository(context: Context) {
     /**
      * 「本机运行测试」总开关。**默认关闭**。
      *
-     * 关闭时：没填后端地址就不允许开测 —— 端上跑没有多次采样/稳定性保护（后端才有
-     * SAMPLES_PER_CASE 多数裁决），单次采样定论的结果方差无人兜底，所以默认引导走后端。
-     * 开启时：恢复旧行为（后端地址留空 = 端上直接跑）。
+     * 打开 = **本机优先**：所有测试都在端上直接跑，**已填的后端地址本轮不生效**
+     * （别再写成「只在地址为空时才生效」—— 那会让地址填过一次就再也回不到本机跑）。
+     * 关闭 = 默认路径：填了后端地址就委托后端，没填则不允许开测 —— 端上跑没有
+     * 多次采样/稳定性保护（后端才有 SAMPLES_PER_CASE 多数裁决），单次采样定论的结果
+     * 方差无人兜底，所以默认引导走后端。
+     *
+     * 判定口径只有一处：`core/RunMode.kt` 的 [com.xieguojian.aiseclab.core.resolveRunMode]，
+     * UI 与服务分支都必须调它。
      */
     fun saveLocalRunEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LOCAL_RUN, enabled).apply()
