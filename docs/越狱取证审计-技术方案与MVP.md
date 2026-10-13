@@ -293,6 +293,24 @@ data class SafetyMetrics(
 ```
 
 ### 3.6 JSON 导出骨架（报告落盘 / 服务端汇总）
+
+> **已实现（2026-10-13）**：`app/src/main/java/.../core/report/ForensicsJson.kt`；
+> 报告页「导出 JSON」按钮 → `TestViewModel.exportJson()`（写
+> `files/Download/aiseclab_report_<ts>.json`，分享 MIME = `application/json`）。
+> 取数**全部**走 `SafetyMetrics` / `ErosionAnalysis` / `HardeningAdvisor` /
+> `DefenseAttribution` —— 本文件不做任何新判定、不重算任何一个数。
+>
+> 与下面骨架的三处差异（都是有意的）：
+> 1. **没有 `ForensicsReport` 那个壳** —— 不复制一份报告结构（复制出来的那份迟早会走岔），
+>    只做序列化出口；
+> 2. **`strategyAsr` 是对象数组**（每条带 `strategy / label / asr / failed / evaluated / unassessed`），
+>    不是骨架里的 `{"roleplay": 0.45}` —— 那样会丢掉分母与剔除量；
+> 3. **`layerFailures` 只含 `planning` / `output`** —— `input` / `tool` 对纯 chat API 不可观测，
+>    由 `layerNote` 显式声明「不适用」，**不计 0**。
+>
+> 「没测到」一律用 `null` 表达（`asr` / `overallScore` / `breakRound.p50` / `firstFailedLayer`），
+> 与铁律 5.2 同一条口径。回归：`ForensicsJsonTest`（12 条，含往返解析与「null 不是 0」）。
+
 ```json
 {
   "model": { "name": "gpt-4o-mini", "provider": "openai-compatible" },

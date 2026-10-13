@@ -15,6 +15,7 @@ import com.xieguojian.aiseclab.core.model.RoleSource
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.repo.HistoryRepository
 import com.xieguojian.aiseclab.core.repo.ProfileRepository
+import com.xieguojian.aiseclab.core.report.ForensicsJson
 import com.xieguojian.aiseclab.core.report.ReportDiff
 import com.xieguojian.aiseclab.core.report.ReportGenerator
 import kotlinx.coroutines.Dispatchers
@@ -335,6 +336,24 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
             ?: getApplication<Application>().cacheDir
         val file = File(dir, "aiseclab_report_${r.timestamp}.md")
         file.writeText(md)
+        return file
+    }
+
+    /**
+     * 导出取证 JSON（方案 §3.6）。传 [report] 则导出指定报告，缺省导出本轮当前报告。
+     *
+     * 与 HTML / Markdown 两个出口的分工：那两个是**给人读**的排版件，这一份是**给程序读**的
+     * —— 报告落盘归档、服务端汇总、将来多模型横向对比（4.4）都靠它。
+     * 所以刻意**不带**基线对比（那是展示层的两两比较，属于阅读上下文、不是报告本体），
+     * 但带全三个出口里口径最完整的一组原始数（策略族分母 / 剔除量 / 不可归因条数 / 加固建议）。
+     */
+    fun exportJson(report: Report? = null): File? {
+        val r = report ?: (_testState.value as? TestState.Done)?.report ?: return null
+        val json = ForensicsJson.encode(r)
+        val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?: getApplication<Application>().cacheDir
+        val file = File(dir, "aiseclab_report_${r.timestamp}.json")
+        file.writeText(json)
         return file
     }
 

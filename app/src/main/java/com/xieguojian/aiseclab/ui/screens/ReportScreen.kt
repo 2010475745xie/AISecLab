@@ -170,9 +170,17 @@ fun ReportScreen(
                 Text(riskText(report.riskLevel), color = riskColor, style = MaterialTheme.typography.titleMedium)
             }
             Spacer(Modifier.height(16.dp))
+            // 三个导出按钮**分两行**：手机可用宽度约 320dp，「导出 HTML / 导出 Markdown / 导出 JSON」
+            // 一行放不下，会挤成截断 —— 而按钮文字被截断在 uiautomator dump 里仍是完整的，
+            // 只有截图能发现（本项目在报告页踩过这个坑）。
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { exportedFile = vm.exportHtml(reportOverride) }) { Text("导出 HTML") }
                 OutlinedButton(onClick = { exportedFile = vm.exportMarkdown(reportOverride) }) { Text("导出 Markdown") }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row {
+                // 取证 JSON：给程序读的出口（报告落盘 / 服务端汇总 / 多模型对比）。
+                OutlinedButton(onClick = { exportedFile = vm.exportJson(reportOverride) }) { Text("导出 JSON") }
             }
             // 导出反馈：之前写到 cacheDir 且忽略返回值，用户够不着也没提示。
             // 现在写外部 Download 目录并拿到 File，显示路径 + 一键分享/打开。
@@ -192,7 +200,12 @@ fun ReportScreen(
                                 val uri = FileProvider.getUriForFile(
                                     ctx, ctx.packageName + ".fileprovider", file
                                 )
-                                val mime = if (file.extension == "html") "text/html" else "text/markdown"
+                                // JSON 走 application/json：分享到微信/邮件时别被当成纯文本附件。
+                                val mime = when (file.extension) {
+                                    "html" -> "text/html"
+                                    "json" -> "application/json"
+                                    else -> "text/markdown"
+                                }
                                 val share = Intent(Intent.ACTION_SEND).apply {
                                     type = mime
                                     putExtra(Intent.EXTRA_STREAM, uri)
