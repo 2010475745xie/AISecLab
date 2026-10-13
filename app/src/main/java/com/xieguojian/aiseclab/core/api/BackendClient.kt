@@ -63,9 +63,12 @@ class BackendClient {
     @Serializable
     private data class SessionCreated(val sessionId: String)
 
-    /** 后端累计的 token 用量（每次都发**累计值**，不是增量）。 */
+    /**
+     * 后端累计的 token 用量（每次都发**累计值**，不是增量）。
+     * `internal`：被同样放开为 internal 的 [SseEvent] 引用，不能更窄。
+     */
     @Serializable
-    private data class SseTokens(
+    internal data class SseTokens(
         val total: Long = 0,
         val prompt: Long = 0,
         val completion: Long = 0,
@@ -76,9 +79,12 @@ class BackendClient {
     /**
      * SSE 事件。后端字段全小写驼峰，与 data class 字段名一一对应；
      * 多数字段有默认值，未知字段被 json(ignoreUnknownKeys) 容忍。
+     *
+     * `internal`（非 `private`）：日志行的构造抽在 [progressLogLines] 纯函数里，
+     * 单测需要构造事件来钉住"message 到底有没有被显示出来"这段接线。
      */
     @Serializable
-    private data class SseEvent(
+    internal data class SseEvent(
         val event: String = "",
         val completed: Int = 0,
         val total: Int = 0,
@@ -206,10 +212,11 @@ class BackendClient {
                             TokenMeter.setFromBackend(t.total, t.prompt, t.completion, t.calls, t.byRole)
                         }
                         onProgress(ev.completed, ev.total)
-                        // 后端 SSE 已带维度与可选 message：转成终端日志行
-                        val dim = ev.dimension?.let { "[$it] " } ?: ""
-                        onLog?.invoke("● [后端] ${dim}进度 ${ev.completed}/${ev.total}")
-                        ev.message?.takeIf { it.isNotBlank() }?.let { onLog?.invoke("  $it") }
+                        // 计数行 + 后端随帧带来的「该条用例摘要」（判定 + 输入/回答/依据片段），
+                        // 与本机跑时 AttackEngine 打的日志同构。构造逻辑收敛在
+                        // SseLogFormat.progressLogLines（纯函数，有单测；**按行拆开**逐条入日志，
+                        // 整段塞成一个日志项会让终端里一条用例占掉一大块，见 TestRunStateHolder.appendLog）。
+                        progressLogLines(ev).forEach { onLog?.invoke(it) }
                     }
                     "done" -> {
                         onLog?.invoke("✓ 后端已完成本轮测试，正在拉取报告…")

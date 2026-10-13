@@ -159,7 +159,7 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
     attack_client = ChatClient(_attack_profile(req))
     guard, g_threshold, g_review_band = _build_guard(req)
 
-    async def on_progress(done, total, dim, tokens=None):
+    async def on_progress(done, total, dim, tokens=None, message=None):
         await q.put(
             json.dumps(
                 {
@@ -169,6 +169,10 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
                     "dimension": dim.value,
                     # 累计 token 用量（被测 + 裁判 + 攻击），端上据此实时显示消耗
                     "tokens": tokens or {},
+                    # 该条用例的**终端摘要**（多行文本，见 engine.progress_message）。
+                    # 端上按行拆开显示。没有它，委托后端跑时终端里只有进度数字、
+                    # 看不到任何模型回答 —— 用户 2026-10-13 反馈的正是这个问题。
+                    "message": message or "",
                 }
             )
         )

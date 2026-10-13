@@ -12,7 +12,15 @@ from .jailbreak_cases import JAILBREAK_VARIANT_CASES
 from .guard import SafetyGuard
 from .judge import judge
 from .llm_client import ChatClient
-from .models import Dimension, ModelProfile, SessionRequest, TestCase, TestResult, Verdict
+from .models import (
+    Dimension,
+    JudgeLevel,
+    ModelProfile,
+    SessionRequest,
+    TestCase,
+    TestResult,
+    Verdict,
+)
 from .report_gen import build_report
 
 logger = logging.getLogger(__name__)
@@ -27,6 +35,52 @@ _warned_samples_temp = False
 _VERDICT_TIE_ORDER = {
     Verdict.FAIL: 0, Verdict.INCONCLUSIVE: 1, Verdict.PASS: 2,
 }
+
+
+# ── 终端进度里给用户看的中文说法 ──
+# ⚠️ 与端上 `core/engine/AttackEngine.kt` 的两个 when 分支**逐字对应**。两处各写一份是
+# 不得已：端上本机跑时由端上生成日志、委托后端时由这里生成，措辞不一致会让用户以为
+# 两侧跑的不是同一件事。改一份记得改另一份。
+_VERDICT_ZH = {
+    Verdict.PASS: "通过",
+    Verdict.FAIL: "失守",
+    Verdict.SKIPPED: "跳过",
+    Verdict.INCONCLUSIVE: "待定",
+}
+_LEVEL_ZH = {
+    JudgeLevel.L1_PATTERN: "规则",
+    JudgeLevel.L2_SEMANTIC: "语义",
+    JudgeLevel.L3_STRUCTURAL: "结构",
+    JudgeLevel.LLM: "LLM",
+}
+
+
+def progress_message(tc: TestCase, resp: str, jr) -> str:
+    """一条用例跑完后的终端摘要 —— **与端上 `AttackEngine` 的日志同构**。
+
+    为什么后端要发它：委托后端跑时，端上终端原本只有「● [后端] [维度] 进度 n/N」，
+    看不到任何模型回答 —— 因为 SSE 只发了计数。用户没法像本机跑那样当场看出
+    "这条到底答了什么、为什么判失守"，只能等报告出来。这个函数把那段补上。
+
+    每行截断长度与端上一致（输入 140 / 回答 180 / 依据 160），并且**先把换行压成空格**：
+    多行回答若原样带进来，终端里一条用例会占掉满屏。
+    """
+    def flat(s: str, n: int) -> str:
+        return s.replace("\n", " ").replace("\r", " ")[:n]
+
+    lines = [
+        "✓ 《%s》 → %s（置信 %d%% · %s）" % (
+            tc.title,
+            _VERDICT_ZH.get(jr.verdict, jr.verdict.value),
+            int(jr.confidence * 100),
+            _LEVEL_ZH.get(jr.level, jr.level.value),
+        ),
+        "  输入：%s" % flat(tc.prompt, 140),
+        "  回答：%s" % flat(resp, 180),
+    ]
+    if jr.evidence:
+        lines.append("  依据：%s" % flat(jr.evidence[0], 160))
+    return "\n".join(lines)
 
 
 def pick_majority(votes: List[Verdict]) -> "tuple[Verdict | None, float]":
@@ -168,7 +222,8 @@ async def run_session(
                 stability=stability, stabilityMeasured=measured,
             ))
             if on_progress:
-                await on_progress(len(results), total, tc.dimension, _tokens())
+                await on_progress(len(results), total, tc.dimension, _tokens(),
+                                  progress_message(tc, resp, jr))
 
     await asyncio.gather(*(one(tc) for tc in cases))
     await target.close()
