@@ -17,6 +17,7 @@ import com.xieguojian.aiseclab.core.TestSession
 import com.xieguojian.aiseclab.core.resolveRunMode
 import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.core.api.TokenMeter
+import com.xieguojian.aiseclab.core.api.toTokenUsage
 import com.xieguojian.aiseclab.core.model.AuxModelProfile
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ModelProfile
@@ -133,7 +134,7 @@ class TestRunService : Service() {
                 TestRunStateHolder.appendLog("🖥 委托后端运行：$backendUrl")
                 TestRunStateHolder.appendLog("▶ 维度：${dims.joinToString("/") { it.label }} · 递归对抗=$recursive · 越狱变体集=$variants")
                 try {
-                    val report = client.run(
+                    val rawReport = client.run(
                         baseUrl = backendUrl,
                         target = target,
                         aux = aux,
@@ -145,6 +146,9 @@ class TestRunService : Service() {
                         onProgress = { c, t -> onProgress(c, t) },
                         onLog = { TestRunStateHolder.appendLog(it) }
                     )
+                    // 本轮账单：跑完就落进报告，历史报告翻出来也能看到当时花了多少。
+                    // 委托后端的这一路也拿得到 —— SSE 每帧都带累计用量，TokenMeter 已经接住了。
+                    val report = rawReport.copy(tokenUsage = TokenMeter.state.value.toTokenUsage())
                     // 存进历史记录（apiKey 抹零在 HistoryRepository 内做）；存档失败不影响本轮结果展示
                     runCatching { HistoryRepository(applicationContext).save(report) }
                     TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
@@ -190,10 +194,13 @@ class TestRunService : Service() {
             TestRunStateHolder.appendLog("▶ 本地模式：端上直接跑（${dims.size} 个维度 · 递归对抗=$recursive · 越狱变体集=$variants）")
             TestRunStateHolder.appendLog("准备中…（加载模型 / 规则引擎）")
             try {
-                val report = session.run(
+                val rawReport = session.run(
                     onProgress = { completed, total -> onProgress(completed, total) },
                     onLog = { TestRunStateHolder.appendLog(it) }
                 )
+                // 本轮账单：跑完就落进报告，历史报告翻出来也能看到当时花了多少
+                //（跑的时候界面上那行实时计数只在当下看得到）。
+                val report = rawReport.copy(tokenUsage = TokenMeter.state.value.toTokenUsage())
                 // 存进历史记录（apiKey 抹零在 HistoryRepository 内做）；存档失败不影响本轮结果展示
                 runCatching { HistoryRepository(applicationContext).save(report) }
                 TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")

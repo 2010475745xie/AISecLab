@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab.core.api
 
+import com.xieguojian.aiseclab.core.model.TokenUsage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -111,4 +112,25 @@ object TokenMeter {
     fun reset() {
         _state.value = Snapshot()
     }
+}
+
+/**
+ * 把实时计数快照转成可以落进报告的账单（[TokenUsage]）。
+ *
+ * 转换点**只有这一处** —— 报告页、Markdown 导出、HTML 导出显示的都是这个结果，
+ * 别再各自从 [TokenMeter.Snapshot] 拼一份（那样「跑的时候显示 1.2万、报告里写 12000」)。
+ *
+ * 一次调用都没有（[TokenMeter.Snapshot.isEmpty]）时返回 `null`，让报告能明确区分
+ * 「没记录」与「没烧」。
+ */
+fun TokenMeter.Snapshot.toTokenUsage(): TokenUsage? {
+    if (isEmpty) return null
+    return TokenUsage(
+        total = total,
+        prompt = prompt,
+        completion = completion,
+        meteredCalls = meteredCalls,
+        unmeteredCalls = unmeteredCalls,
+        byRole = byRole.entries.associate { (role, v) -> role.label to v },
+    )
 }

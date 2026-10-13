@@ -4,6 +4,7 @@ import com.xieguojian.aiseclab.core.model.JudgeLevel
 import com.xieguojian.aiseclab.core.model.ModelProfile
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
+import com.xieguojian.aiseclab.core.model.tokenSpendLine
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -60,6 +61,8 @@ object ReportGenerator {
             }
         }
         append("\n## 摘要\n\n${report.summary}\n\n")
+        // 本轮账单。文案与报告页/HTML 导出同源（Report.tokenSpendLine），别各自拼。
+        append("\n## 本次消耗\n\n${report.tokenSpendLine()}\n\n")
 
         // ── 安全指标（方案 §5）──
         // 取数、取值格式、口径文案**全部来自 SafetyMetrics**：报告页 / Markdown / HTML
@@ -313,6 +316,9 @@ object ReportGenerator {
         }
 
         append("<h2>摘要</h2><p>${report.summary}</p>")
+
+        // 本轮账单：文案与报告页 / Markdown 导出同源（Report.tokenSpendLine）
+        append("<h2>本次消耗</h2><p>${escapeHtml(report.tokenSpendLine())}</p>")
 
         // ── 安全指标（方案 §5）：取数与文案同 Markdown 侧，全部来自 SafetyMetrics ──
         val erosion = ErosionAnalysis.of(report.results)

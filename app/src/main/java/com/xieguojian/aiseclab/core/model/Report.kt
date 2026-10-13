@@ -14,8 +14,60 @@ data class Report(
     val riskLevel: RiskLevel,
     val dimensions: Map<Dimension, DimensionScore>,
     val results: List<TestResult>,
-    val summary: String
+    val summary: String,
+    /**
+     * 本轮实际烧掉的 token（按角色分账）。**跑完就落进报告**，所以历史报告翻出来
+     * 也能看到当时花了多少 —— 之前只在跑的时候界面上显示，一离开那一刻就再也查不到了。
+     *
+     * `null` = 这份报告没有用量记录（旧版本生成的报告，或本轮一次模型调用都没发起）。
+     * 展示时必须说「未记录」，**不能显示成 0** —— 「没记录」和「一次没烧」是两回事。
+     */
+    val tokenUsage: TokenUsage? = null
 )
+
+/**
+ * 一轮测试的 token 用量账单。与 [com.xieguojian.aiseclab.core.api.TokenMeter.Snapshot]
+ * 同源（后者是跑的时候的实时计数），这里只保留落盘需要的部分。
+ *
+ * 两个刻意的取舍（与 TokenMeter 一致）：
+ * 1. 只统计**带回 usage 的成功响应** —— 宁可不计也不估算，估出来的数会被当账单看。
+ * 2. 端点不回 usage（本地 llama.cpp 默认不回）时计入 [unmeteredCalls]，
+ *    让读者知道「这个数偏低，有 N 次调用没算进来」，而不是假装完整。
+ */
+@Serializable
+data class TokenUsage(
+    val total: Long = 0,
+    val prompt: Long = 0,
+    val completion: Long = 0,
+    /** 成功且**带回 usage** 的调用数。 */
+    val meteredCalls: Int = 0,
+    /** 成功但**没带 usage** 的调用数。 */
+    val unmeteredCalls: Int = 0,
+    /** 角色（中文标签，如「被测 / 裁判 / 攻击 / 护栏」）→ token 数。 */
+    val byRole: Map<String, Long> = emptyMap(),
+) {
+    /** 过万折算成 `1.2万`，避免长数字撑破一行（与跑的时候界面上同一把尺）。 */
+    private fun fmt(v: Long): String =
+        if (v >= 10_000) "%.1f万".format(v / 10_000.0) else "%,d".format(v)
+
+    /** 一行摘要，如 `1.2万 token（被测 8,000 · 裁判 4,340）· 3 次未返回用量`。 */
+    fun summary(): String {
+        val parts = byRole.entries.filter { it.value > 0 }
+            .joinToString(" · ") { "${it.key} ${fmt(it.value)}" }
+        val base = "${fmt(total)} token" + if (parts.isNotEmpty()) "（$parts）" else ""
+        return if (unmeteredCalls > 0) "$base · $unmeteredCalls 次未返回用量" else base
+    }
+}
+
+/**
+ * 「本次消耗」这一行的文案。**报告页 / Markdown 导出 / HTML 导出三处共用**，
+ * 不许各自再拼一遍（那样「界面说 1.2万、导出写 12000」只是时间问题）。
+ *
+ * 没有用量记录时说「未记录」，**不显示 0**：「没记录」和「一次没烧」是两回事。
+ */
+fun Report.tokenSpendLine(): String =
+    tokenUsage?.summary()
+        ?: "未记录 —— 这份报告生成时没有留下用量（旧版本生成的报告，或本轮没有发起过模型调用）。"
 
 @Serializable
 data class DimensionScore(

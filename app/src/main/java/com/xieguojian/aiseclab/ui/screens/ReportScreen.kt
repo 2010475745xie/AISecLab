@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
+import com.xieguojian.aiseclab.core.model.tokenSpendLine
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.report.ReportDiff
@@ -207,6 +208,23 @@ fun ReportScreen(
             Text("摘要", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(6.dp))
             Text(report.summary, style = MaterialTheme.typography.bodyMedium)
+        }
+
+        // ── 本轮账单：这一轮烧了多少 token ──
+        // 口径与跑的时候界面上那行实时计数同源（core/api/TokenMeter 的 toTokenUsage），
+        // 但这一份是**落进报告**的 —— 历史报告翻出来也能看到当时花了多少，
+        // 而跑的时候那行只在当下可见。
+        // tokenUsage == null 时显示「未记录」而不是 0：「没记录」和「一次没烧」是两回事。
+        item {
+            Spacer(Modifier.height(16.dp))
+            Text("本次消耗", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                report.tokenSpendLine(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (report.tokenUsage == null) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onSurface
+            )
         }
 
         // ── 安全指标（方案 §5）：别再只报 ASR ──
