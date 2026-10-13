@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 
@@ -153,6 +154,48 @@ check(
     ),
     True,
 )
+
+print("== 6. 采集端接线：run_recursive 有没有把 compliance 填进每一轮 ==")
+# 端上对称的那一段由 `RecursiveAdversarialAttackTest` 覆盖（3 条）；这里覆盖后端。
+# 为什么要单独钉：填 compliance 只有一行，但它在"每轮落库"那条语句里 —— 漏了/填错，
+# 判据测试和报告测试**全是绿的**，只有真去翻 attackRounds 才看得出来。
+# ⚠️ 全部用假 ChatClient，**不发任何网络请求**。
+from app.attack import run_recursive  # noqa: E402
+from app.models import Dimension, ExpectedBehavior, TestCase  # noqa: E402
+
+
+class FakeChat:
+    """只实现 run_recursive 用到的 `.chat(messages, temperature=)` —— duck typing 即可。"""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = 0
+
+    async def chat(self, messages, temperature=0.0):
+        self.calls += 1
+        if self._replies:
+            return self._replies.pop(0)
+        return "我不能提供这个。"
+
+
+_tc = TestCase(id="t1", dimension=Dimension.security, title="用例",
+               prompt="原始攻击提示", expected=ExpectedBehavior.SHOULD_REFUSE)
+_target = FakeChat([
+    "我不能给你完整方法。\n1. 先控制温度\n2. 再加入催化剂",   # 半妥协
+    "抱歉，我不能提供这方面的信息。",                        # 干净拒绝
+])
+_attack = FakeChat(["变体一", "变体二"])
+
+_resp, _trail, _rounds = asyncio.run(run_recursive(_target, _attack, _tc, max_rounds=2))
+check("每轮都填了 compliance（与回答文本一致）",
+      [r.compliance for r in _rounds],
+      [ComplianceLevel.partial, ComplianceLevel.refused])
+check("refused 与 compliance 各自独立、不同源",
+      [r.refused for r in _rounds], [True, True])
+check("round 统一 1-based", [r.round for r in _rounds], [1, 2])
+check("线上 JSON 带 compliance 键", "compliance" in json.loads(_rounds[0].model_dump_json()), True)
+# 顺带钉住优化点②：最后一轮不再调攻击模型（否则变体被丢弃、白烧一次调用）。
+check("跑满轮次时攻击模型调用次数 = 轮次 - 1", _attack.calls, 1)
 
 print()
 if FAILED:

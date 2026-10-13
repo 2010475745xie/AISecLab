@@ -53,7 +53,7 @@
 | 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
 | 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
 | 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，100 条 = 20 目标 × 5 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→150 条） |
-| 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（15 项） |
+| 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`RecursiveAdversarialAttackTest`（3 条，接线）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（22 项，含 `run_recursive` 接线） |
 | 3.3 | **侵蚀曲线 & `breakRound`**：`core/report/ErosionCurve.kt`（纯口径层）+ `ui/chart/ErosionTrack.kt` + `ChartSvg.erosionCumulative`；报告页 / Markdown / HTML 三处同源 | `ErosionCurveTest`（20 条）+ 真机报告页 |
 | 4.2 | **新指标面板**：`core/report/SafetyMetrics.kt` —— 方案 §5 六项 + 策略×意图矩阵（`asrColor` 独立于置信度色阶）；报告页 `MetricsPanel` + 默认收起矩阵，两处导出同源 | `SafetyMetricsTest`（23 条）+ `ReportChartTest`「ASR热力色不能用置信度色阶」 |
 
