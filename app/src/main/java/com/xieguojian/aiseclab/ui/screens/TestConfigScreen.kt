@@ -205,8 +205,15 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "端上跑没有多次采样稳定性保护（单次采样定论、方差无人兜底），" +
-                        "也不采集逐轮对抗记录，所以报告里的「多轮侵蚀 / 破防步数 / 分层归因」会是空的。",
+                    buildString {
+                        append("端上跑没有多次采样稳定性保护（单次采样定论、方差无人兜底）。")
+                        if (useRecursive) {
+                            append("已开「递归对抗」：要配好辅助模型，否则攻击编排会退化成静态变异。")
+                        } else {
+                            append("本轮没开「递归对抗」，逐轮记录不会被采集，报告里的「多轮侵蚀 / 破防步数 / " +
+                                "分层归因」会是空的 —— 想看这几块，把上面的「递归对抗」打开（需先配好辅助模型）。")
+                        }
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )

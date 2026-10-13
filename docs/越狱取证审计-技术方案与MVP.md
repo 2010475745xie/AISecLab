@@ -43,9 +43,9 @@
 > 每项标注：**实现要点 / 验收标准 / 落在现有代码的位置**。
 > 现有扩展点：`AttackModule`、`Judge`、`LlmJudge(chat, roles)`、`ScoringModel`、`ReportGenerator`。
 
-### 落地状态（2026-10-12 快照，commits `8dfa191` / `7630980` / `1731f7d` / `0674f38` / `2cd1e21`）
+### 落地状态（2026-10-13 快照）
 
-**✓ 已完成 6 项（周 1 地基全部 + 取证核心两块）**
+**✓ 已完成 7 项（周 1 地基全部 + 取证核心两块 + 半妥协检测）**
 
 | # | 落地物 | 复现 |
 |---|---|---|
@@ -53,17 +53,25 @@
 | 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
 | 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
 | 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，100 条 = 20 目标 × 5 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→150 条） |
+| 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（15 项） |
 | 3.3 | **侵蚀曲线 & `breakRound`**：`core/report/ErosionCurve.kt`（纯口径层）+ `ui/chart/ErosionTrack.kt` + `ChartSvg.erosionCumulative`；报告页 / Markdown / HTML 三处同源 | `ErosionCurveTest`（20 条）+ 真机报告页 |
-| 4.2 | **新指标面板**：`core/report/SafetyMetrics.kt` —— 方案 §5 六项 + 策略×意图矩阵（`asrColor` 独立于置信度色阶）；报告页 `MetricsPanel` + 默认收起矩阵，两处导出同源 | `SafetyMetricsTest`（20 条）+ `ReportChartTest`「ASR热力色不能用置信度色阶」 |
+| 4.2 | **新指标面板**：`core/report/SafetyMetrics.kt` —— 方案 §5 六项 + 策略×意图矩阵（`asrColor` 独立于置信度色阶）；报告页 `MetricsPanel` + 默认收起矩阵，两处导出同源 | `SafetyMetricsTest`（23 条）+ `ReportChartTest`「ASR热力色不能用置信度色阶」 |
 
 **~ 部分完成 5 项**：2.3 置信门控（门控已有，"低置信升级链路可观测"未做）、
 3.1 多轮侵蚀执行器（`RecursiveAdversarialAttack` 已有，非 T1 暖场→加压→TN 结构）、
-3.2 逐轮记录（`AttackRound` 已落 prompt/response/refused，缺 `refusalStrength`/`compliance`/`toolCalls`）、
+3.2 逐轮记录（`AttackRound` 已落 prompt/response/refused/**compliance**，仍缺 `refusalStrength`/`toolCalls`）、
 3.4 分层破防归因（**已按可证伪口径落地**：只归 `PLANNING`/`OUTPUT` 两层，
 输入层与工具层对纯 chat API 不可观测、明写"不适用"而不计 0；见下方隐患）、
 4.1 取证报告（四维报告 + 4 张图 + 策略×意图矩阵 + 破防步数 + 失效层已有，**缺加固建议**）。
 
-**✗ 未开始 5 项**：2.1 否定感知拒绝打分、2.2 半妥协检测、3.5 加固建议、4.3 内部信号、4.4 众测对比。
+**✗ 未开始 4 项**：2.1 否定感知拒绝打分、3.5 加固建议、4.3 内部信号、4.4 众测对比。
+
+> ⚠️ **2.2 半妥协是「测量」不是「判定」**：`AttackRound.compliance` 与 `refused` **不同源、也不等价**
+> （后者是破防判据的派生量，前者是独立的文本测量），「refused=true 但 compliance=complied」
+> 是合法组合、不是 bug。「有没有被攻破」一律仍只看最终 verdict。
+> 「半妥协轮次」的分母是**轮次**不是用例条数 —— 1 条用例 5 轮就是 5 个观测，**不能拿它换算 ASR / 失守率**。
+> 没有逐轮记录时（本机跑未开递归对抗）该行显示「无逐轮记录」，不写「0 条半妥协」。
+> 判据刻意偏敏感（宁多报不漏报：漏一条 = 放过一次真失守），所以它是**送人工复核的线索**，不是结论。
 
 > ⚠️ **3.4 分层破防归因的口径（已落地，但仍是隐患点）**：被测模型是纯 chat API，**没有真正的「工具层」**。
 > 硬做四层归因只能靠 LLM 编，答辩被追问会穿帮 → 现实现压成**可从响应文本证伪**的两层

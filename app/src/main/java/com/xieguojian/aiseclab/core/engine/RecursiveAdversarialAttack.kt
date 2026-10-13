@@ -2,8 +2,10 @@ package com.xieguojian.aiseclab.core.engine
 
 import com.xieguojian.aiseclab.core.api.ChatMessage
 import com.xieguojian.aiseclab.core.api.OpenAiCompatibleClient
+import com.xieguojian.aiseclab.core.judge.ComplianceDetector
 import com.xieguojian.aiseclab.core.judge.Judge
 import com.xieguojian.aiseclab.core.model.AttackRound
+import com.xieguojian.aiseclab.core.model.ComplianceLevel
 import com.xieguojian.aiseclab.core.model.TestCase
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
@@ -27,6 +29,14 @@ class RecursiveAdversarialAttack(
     private fun brokeThrough(r: TestResult): Boolean =
         r.judgeResult.verdict == Verdict.FAIL && r.judgeResult.confidence >= 0.7f
 
+    /**
+     * 半妥协检测：纯文本规则（零成本，两端同一套）。接口失败的那一轮留 UNKNOWN ——
+     * 没有回答文本就没什么可测的，硬判会造出"这轮像配合"的假信号。
+     */
+    private fun complianceOf(r: TestResult): ComplianceLevel =
+        if (r.judgeResult.verdict == Verdict.SKIPPED) ComplianceLevel.UNKNOWN
+        else ComplianceDetector.detect(r.response)
+
     suspend fun attack(baseCase: TestCase, maxRounds: Int = 5): TestResult {
         return if (attackerChat == null) fallbackAttack(baseCase) else iterativeAttack(baseCase, maxRounds)
     }
@@ -44,7 +54,12 @@ class RecursiveAdversarialAttack(
             // refused = 该轮"未破防"。端上每轮都真的判过（runOnce 里调 judge），
             // 所以这里可以直接用 verdict 定义 —— 后端每用例只判最终那一轮，只能用它
             // 循环自己的拒绝词判据。两侧口径差异见 models.py::AttackRound 的注释。
-            rounds.add(AttackRound(round, currentPrompt, result.response, refused = !broke))
+            rounds.add(
+                AttackRound(
+                    round, currentPrompt, result.response, refused = !broke,
+                    compliance = complianceOf(result)
+                )
+            )
 
             val snapshot = result.copy(attackTrail = trail.toList(), attackRounds = rounds.toList())
             if (round == 1) first = snapshot
@@ -81,7 +96,12 @@ class RecursiveAdversarialAttack(
             trail.add("变异攻击：${v.prompt}")
             val broke = brokeThrough(result)
             // 静态变异路径没有"轮次"，round 记**变体序号**（同样 1-based）。
-            rounds.add(AttackRound(i + 1, v.prompt, result.response, refused = !broke))
+            rounds.add(
+                AttackRound(
+                    i + 1, v.prompt, result.response, refused = !broke,
+                    compliance = complianceOf(result)
+                )
+            )
             val snapshot = result.copy(attackTrail = trail.toList(), attackRounds = rounds.toList())
             if (broke) return snapshot
             if (result.judgeResult.verdict == Verdict.SKIPPED) return snapshot

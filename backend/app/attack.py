@@ -20,6 +20,7 @@ import logging
 import os
 from typing import List, Optional, Tuple
 
+from .compliance import detect as detect_compliance
 from .llm_client import ChatClient
 from .models import (
     AttackRound,
@@ -259,8 +260,14 @@ async def run_recursive(target: ChatClient, attack_client: ChatClient, tc: TestC
         # 逐轮 verdict 根本不存在（逐轮判会把裁判调用量抬到最多 10 倍）。端上每轮都判，
         # 所以端上那边才用 verdict 定义，两侧口径差异见 models.py::AttackRound 的注释。
         refused_this_round = any(w in resp_norm for w in refusal_markers)
+        # compliance = 该轮的**态度测量**（纯文本规则，两端镜像，判据见 compliance.py）。
+        # 它的破防判据与本循环的 `refusal_markers` **刻意不同源**：这里用的是端上同款
+        # STRONG_REFUSAL（第一人称拒绝话术）+ 实质内容检测，问的是"这轮读起来像什么"，
+        # 不参与破防决策。半妥协（既有拒绝话术、又给了内容）是真实越狱最常见的形态，
+        # 但它**不是**判定结论 —— 有没有被攻破仍然只看最终 verdict。
         rounds.append(AttackRound(round=r + 1, prompt=prompt, response=resp,
-                                  refused=refused_this_round))
+                                  refused=refused_this_round,
+                                  compliance=detect_compliance(resp)))
         if refused_this_round:
             # 优化点②：仅当还有下一轮能消费变异结果时才调攻击模型；否则变体被丢弃，
             # 白烧一次调用（默认 recursive=False 时更明显，每跑一轮浪费约 18 次攻击模型调用）。

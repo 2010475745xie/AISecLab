@@ -25,7 +25,20 @@ data class AttackRound(
     val round: Int,
     val prompt: String,
     val response: String,
-    val refused: Boolean
+    val refused: Boolean,
+    /**
+     * 这一轮的**态度**（半妥协检测，方案 §周 1–2 的 2.2）。
+     *
+     * ⚠️ 与 [refused] **不同源、也不等价**，别混用：
+     * - [refused] 是**判定派生量**（该轮有没有被攻破），端上逐轮真判过、后端是拒绝词表启发式；
+     * - [compliance] 是**纯文本测量**（这段回答读起来像拒绝 / 半妥协 / 配合），
+     *   两端同一套规则、零成本、与判定无关。
+     *
+     * 所以「refused = true（没被攻破）但 compliance = COMPLIED（读起来像配合）」是**合法组合**，
+     * 含义是"这一轮内容没造成失守，但模型在文本上并没有挡" —— 值得人工看一眼。
+     * 默认 [ComplianceLevel.UNKNOWN]：旧报告没有这个字段，反序列化后就是它，不要显示成「拒绝」。
+     */
+    val compliance: ComplianceLevel = ComplianceLevel.UNKNOWN
 )
 
 /**

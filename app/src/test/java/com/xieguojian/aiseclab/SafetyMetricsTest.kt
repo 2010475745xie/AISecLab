@@ -1,6 +1,7 @@
 package com.xieguojian.aiseclab
 
 import com.xieguojian.aiseclab.core.model.AttackRound
+import com.xieguojian.aiseclab.core.model.ComplianceLevel
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ExpectedBehavior
 import com.xieguojian.aiseclab.core.model.HarmIntent
@@ -58,6 +59,28 @@ class SafetyMetricsTest {
         ),
         latencyMs = 10L,
         attackRounds = rounds.mapIndexed { i, r -> AttackRound(i + 1, "p${i + 1}", "r${i + 1}", refused = r) }
+    )
+
+    /** 直接喂 `AttackRound` 的用例 —— 半妥协行只读逐轮记录，需要精确控制每轮的 compliance。 */
+    private fun attackWithRounds(
+        id: String,
+        verdict: Verdict,
+        rounds: List<AttackRound>,
+        intent: HarmIntent = HarmIntent.MALWARE,
+        strategy: JailbreakStrategy = JailbreakStrategy.ROLEPLAY
+    ) = TestResult(
+        testCase = TestCase(
+            id = id, dimension = Dimension.SECURITY, title = "用例 $id",
+            prompt = "p-$id", expected = ExpectedBehavior.SHOULD_REFUSE,
+            intent = intent, strategy = strategy
+        ),
+        response = "回答 $id",
+        judgeResult = JudgeResult(
+            verdict = verdict, confidence = 0.95f, level = JudgeLevel.LLM,
+            evidence = listOf("依据 $id"), score = if (verdict == Verdict.PASS) 1f else 0f
+        ),
+        latencyMs = 10L,
+        attackRounds = rounds
     )
 
     private fun benign(
@@ -429,5 +452,49 @@ class SafetyMetricsTest {
         val okRow = ok.rows().first { it.label == "破防步数 P50 / P90" }
         assertEquals("-- / --", okRow.value)
         assertTrue(okRow.hint.contains("没有判定失守的多步用例"))
+    }
+
+    // ── 半妥协轮次（方案 §周 1–2 的 2.2）──
+    // 这三条盯的是**口径**：它是轮次不是条数、没采集不能写成零、两者不能互相换算。
+
+    @Test
+    fun `逐轮记录里的半妥协单独成行`() {
+        // 半妥协是真实越狱里最常见的形态（嘴上拒绝、手上给内容），但整段判定两头不讨好 ——
+        // 判 PASS 会放过它、判 FAIL 会冤枉干净拒绝，它只有靠这一行才能被看见。
+        // 同时钉住顺序：半妥协 / 拒绝 / 配合 / 未判定，零值的类目不出现在串里。
+        val row = SafetyMetrics.of(listOf(attackWithRounds(
+            "c1",
+            Verdict.FAIL,
+            listOf(
+                AttackRound(1, "p1", "r1", refused = true, compliance = ComplianceLevel.REFUSED),
+                AttackRound(2, "p2", "r2", refused = true, compliance = ComplianceLevel.PARTIAL),
+                AttackRound(3, "p3", "r3", refused = false, compliance = ComplianceLevel.COMPLIED)
+            )
+        ))).rows().first { it.label == "半妥协轮次" }
+        assertEquals("半妥协 1 · 拒绝 1 · 配合 1", row.value)
+    }
+
+    @Test
+    fun `没有逐轮记录时半妥协行说没采集而不是零`() {
+        // 本机跑（未开递归对抗）没有 attackRounds —— 必须说「无逐轮记录」。
+        // 写成「0 条半妥协」就是把「没采集」当「测出来很干净」，比错数更误导。
+        val m = SafetyMetrics.of(listOf(attack("a", Verdict.PASS)))
+        val row = m.rows().first { it.label == "半妥协轮次" }
+        assertEquals("无逐轮记录", row.value)
+        assertFalse("没有逐轮记录就不能说「测过」", m.compliance.measured)
+        assertTrue("必须点明这是「没采集」", row.hint.contains("没采集"))
+    }
+
+    @Test
+    fun `半妥协行的分母是轮次不是条数`() {
+        // 口径护栏：1 条用例 5 轮、轮轮半妥协 → 值是「半妥协 5」，而失守只有 0 条（判定 PASS）。
+        // 这一行与 ASR / 失守条数**口径不同**，谁都不能拿它换算失守率。
+        val rounds = (1..5).map {
+            AttackRound(it, "p$it", "r$it", refused = true, compliance = ComplianceLevel.PARTIAL)
+        }
+        val m = SafetyMetrics.of(listOf(attackWithRounds("c2", Verdict.PASS, rounds)))
+        assertEquals("半妥协 5", m.rows().first { it.label == "半妥协轮次" }.value)
+        assertEquals("轮次多不代表失守 —— 判定仍是 PASS", 0, m.failed)
+        assertEquals(1, m.evaluated)
     }
 }
