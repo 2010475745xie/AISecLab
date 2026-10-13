@@ -32,8 +32,12 @@ class RecursiveAdversarialAttack(
     /**
      * 半妥协检测：纯文本规则（零成本，两端同一套）。接口失败的那一轮留 UNKNOWN ——
      * 没有回答文本就没什么可测的，硬判会造出"这轮像配合"的假信号。
+     *
+     * `internal` 是为了让单测能直接钉住**这一层的两条分支**（见 `RecursiveAdversarialAttackTest`）：
+     * 它是纯函数（只读判定结果与回答文本、无副作用），却在两条攻击路径上各被调用一次 ——
+     * 漏填或填错等于整个 2.2 白做，而只看代码是看不出来的。
      */
-    private fun complianceOf(r: TestResult): ComplianceLevel =
+    internal fun complianceOf(r: TestResult): ComplianceLevel =
         if (r.judgeResult.verdict == Verdict.SKIPPED) ComplianceLevel.UNKNOWN
         else ComplianceDetector.detect(r.response)
 
