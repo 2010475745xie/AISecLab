@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.core.model.Report
+import com.xieguojian.aiseclab.ui.theme.SemanticTheme
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.TestViewModel
@@ -174,7 +175,7 @@ private fun RunningCard(completed: Int, total: Int, tokensText: String?, onClick
 private fun DoneCard(tokensText: String?, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(Modifier.padding(14.dp)) {
-            Text("✓ 测试完成", style = MaterialTheme.typography.titleMedium, color = Color(0xFF1D9E75))
+            Text("✓ 测试完成", style = MaterialTheme.typography.titleMedium, color = SemanticTheme.colors.good)
             Spacer(Modifier.height(6.dp))
             Text("本轮测试已完成，点击查看详细报告", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             tokensText?.let {
@@ -206,13 +207,8 @@ private fun HistoryItem(
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
-    val riskColor = when (report.riskLevel) {
-        RiskLevel.LOW -> Color(0xFF1D9E75)
-        RiskLevel.MEDIUM -> Color(0xFFBA7517)
-        RiskLevel.HIGH -> Color(0xFFD85A30)
-        RiskLevel.CRITICAL -> Color(0xFFE24B4A)
-        RiskLevel.UNKNOWN -> Color(0xFF8A8A8A)
-    }
+    // 与报告页同源：判据在 ChartPalette.slotOf，配色随明暗主题。
+    val riskColor = SemanticTheme.colors.risk(report.riskLevel)
     val totalPassed = report.dimensions.values.sumOf { it.passed }
     val totalCases = report.dimensions.values.sumOf { it.total }
 

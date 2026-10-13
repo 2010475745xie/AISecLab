@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -49,6 +50,7 @@ import com.xieguojian.aiseclab.ui.chart.MiniBar
 import com.xieguojian.aiseclab.ui.chart.MiniHeatmap
 import com.xieguojian.aiseclab.ui.chart.TimelineTrack
 import com.xieguojian.aiseclab.ui.TestViewModel
+import com.xieguojian.aiseclab.ui.theme.SemanticTheme
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -95,13 +97,9 @@ fun ReportScreen(
         baseline?.let { ReportDiff.compare(it, report) }
     }
 
-    val riskColor = when (report.riskLevel) {
-        RiskLevel.LOW -> Color(0xFF1D9E75)
-        RiskLevel.MEDIUM -> Color(0xFFBA7517)
-        RiskLevel.HIGH -> Color(0xFFD85A30)
-        RiskLevel.CRITICAL -> Color(0xFFE24B4A)
-        RiskLevel.UNKNOWN -> Color(0xFF8A8A8A)
-    }
+    // 风险色随明暗主题切档（深色模式下自动换亮档，见 ui/theme/SemanticColors.kt）。
+    // 「等级 → 语义槽位」的判据在 ChartPalette.slotOf —— 全项目只此一份。
+    val riskColor = SemanticTheme.colors.risk(report.riskLevel)
 
     // 四路分区与导出文档（Markdown / HTML 导出）共用同一份实现，见 core/report/ReportSections.kt。
     // 这里只负责渲染 —— 分区判据抄三遍正是之前那个「needsReview 的 SKIPPED 会重复出现」缺口的根因。
@@ -145,7 +143,17 @@ fun ReportScreen(
     // 加固建议却让人去改输出过滤"这种自相矛盾的报告，答辩被追问是硬伤。
     val hardening = remember(report) { HardeningAdvisor.advise(sections.fails) }
 
-    LazyColumn(Modifier.fillMaxSize().padding(20.dp)) {
+    // 大屏（平板）上限宽：不限宽时一行正文能拉到 1000dp 以上，眼睛得来回扫。
+    // ⚠️ `widthIn` 必须写在 `fillMaxSize` **之前** —— 反过来的话 fillMaxSize 已经把
+    // minWidth 顶到父宽，widthIn 的 max 会被 coerceIn 夹回去、**完全失效**（Compose 约束
+    // 传播是外→内逐层收窄的）。
+    // 手机宽度（≈360~420dp）够不到这个上限，所以对手机**零影响**。
+    LazyColumn(
+        Modifier
+            .widthIn(max = CONTENT_MAX_WIDTH)
+            .fillMaxSize()
+            .padding(20.dp)
+    ) {
         item {
             Text("AISecLab 测评报告", style = MaterialTheme.typography.headlineMedium)
             Text(modelLabel(report.modelProfile), style = MaterialTheme.typography.bodyMedium)
@@ -406,7 +414,7 @@ fun ReportScreen(
                 item {
                     Spacer(Modifier.height(8.dp))
                     Text("新增失守（基线通过 → 本轮失守）", style = MaterialTheme.typography.titleSmall,
-                        color = Color(0xFFE24B4A))
+                        color = SemanticTheme.colors.bad)
                 }
                 items(diff.regressions) { c -> ChangeItem(c, ReportDiff.verdictText(c.from), "失守") }
             }
@@ -414,7 +422,7 @@ fun ReportScreen(
                 item {
                     Spacer(Modifier.height(8.dp))
                     Text("已修复（基线失守 → 本轮通过）", style = MaterialTheme.typography.titleSmall,
-                        color = Color(0xFF1D9E75))
+                        color = SemanticTheme.colors.good)
                 }
                 items(diff.fixed) { c -> ChangeItem(c, ReportDiff.verdictText(c.from), "通过") }
             }
@@ -422,7 +430,7 @@ fun ReportScreen(
                 item {
                     Spacer(Modifier.height(8.dp))
                     Text("无法比较（含不可评估/待复核）", style = MaterialTheme.typography.titleSmall,
-                        color = Color(0xFF8A8A8A))
+                        color = SemanticTheme.colors.neutral)
                 }
                 items(diff.uncomparable) { c -> ChangeItem(c, ReportDiff.verdictText(c.from), ReportDiff.verdictText(c.to)) }
             }
@@ -463,7 +471,7 @@ fun ReportScreen(
                             note,
                             style = MaterialTheme.typography.bodySmall,
                             color = when {
-                                note.startsWith("⚠️") -> Color(0xFFD85A30)
+                                note.startsWith("⚠️") -> SemanticTheme.colors.high
                                 note.startsWith("ℹ️") -> MaterialTheme.colorScheme.onSurfaceVariant
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             }
@@ -655,7 +663,7 @@ private fun FindingItem(r: TestResult) {
                 Text(
                     if (r.stability < 0.8f) "⚠️ 判定不稳定：采样一致性仅 %.0f%%（结论可能不可靠）".format(r.stability * 100)
                     else "采样一致性 %.0f%%".format(r.stability * 100),
-                    color = if (r.stability < 0.8f) Color(0xFFD85A30) else MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (r.stability < 0.8f) SemanticTheme.colors.high else MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -779,7 +787,7 @@ private fun HardeningCard(item: HardeningAdvisor.HardeningItem) {
             Text(
                 item.layer?.let { "先失效：${it.label}" } ?: "先失效层不可归因",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (item.hasLayer) Color(0xFFD85A30) else MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (item.hasLayer) SemanticTheme.colors.high else MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(6.dp))
             Text(item.action, style = MaterialTheme.typography.bodyMedium)
@@ -888,13 +896,14 @@ private fun DiffSummaryCard(diff: ReportDiff.Result) {
                 Text(
                     if (diff.base.riskLevel == RiskLevel.UNKNOWN) "--" else "%.1f".format(diff.baseTotal),
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color(0xFF8A8A8A)
+                    color = SemanticTheme.colors.neutral
                 )
                 Text(" → ", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 3.dp))
                 Text(
                     if (diff.cur.riskLevel == RiskLevel.UNKNOWN) "--" else "%.1f".format(diff.curTotal),
                     style = MaterialTheme.typography.titleLarge,
-                    color = if (diff.cur.riskLevel == RiskLevel.UNKNOWN) Color(0xFF8A8A8A) else Color(0xFF1D9E75)
+                    color = if (diff.cur.riskLevel == RiskLevel.UNKNOWN) SemanticTheme.colors.neutral
+                    else SemanticTheme.colors.good
                 )
                 Spacer(Modifier.weight(1f))
                 // scoreDelta 为 null = 有--侧无有效样本，不能比
@@ -908,10 +917,10 @@ private fun DiffSummaryCard(diff: ReportDiff.Result) {
                     },
                     style = MaterialTheme.typography.titleMedium,
                     color = when {
-                        d == null -> Color(0xFF8A8A8A)
-                        d > 0f -> Color(0xFF1D9E75)
-                        d < 0f -> Color(0xFFE24B4A)
-                        else -> Color(0xFF8A8A8A)
+                        d == null -> SemanticTheme.colors.neutral
+                        d > 0f -> SemanticTheme.colors.good
+                        d < 0f -> SemanticTheme.colors.bad
+                        else -> SemanticTheme.colors.neutral
                     }
                 )
             }
@@ -923,9 +932,9 @@ private fun DiffSummaryCard(diff: ReportDiff.Result) {
                         (bd?.let { "%+.1f".format(it) } ?: "—"),
                     style = MaterialTheme.typography.bodySmall,
                     color = when {
-                        bd == null -> Color(0xFF8A8A8A)
-                        bd > 0f -> Color(0xFF1D9E75)
-                        bd < 0f -> Color(0xFFE24B4A)
+                        bd == null -> SemanticTheme.colors.neutral
+                        bd > 0f -> SemanticTheme.colors.good
+                        bd < 0f -> SemanticTheme.colors.bad
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     }
                 )
@@ -957,6 +966,12 @@ private fun timeFmtOnly(ts: Long): String =
 
 /** 时间轴区块最多画几条用例 —— 超出只给计数，避免报告被图表淹掉。 */
 private const val TRAIL_CASES_SHOWN = 8
+
+/**
+ * 内容最大宽度。超过就不再加宽 —— 平板上一行正文若拉到 1000dp 以上，读的时候眼睛要来回扫。
+ * 手机（≈360~420dp）永远够不到这个值，所以这条约束对手机零影响。
+ */
+private val CONTENT_MAX_WIDTH = 840.dp
 
 /** 判定层级分布取数：只认 `JudgeResult.level`，不做任何新判定。 */
 private fun levelCount(report: Report, level: JudgeLevel): Int =

@@ -283,13 +283,10 @@ object ReportGenerator {
     fun toHtml(report: Report, diff: ReportDiff.Result? = null): String = buildString {
         val noEvidence = report.riskLevel == RiskLevel.UNKNOWN
         val sections = ReportSections.of(report)
-        val riskColor = when (report.riskLevel) {
-            RiskLevel.LOW -> "#1D9E75"
-            RiskLevel.MEDIUM -> "#BA7517"
-            RiskLevel.HIGH -> "#D85A30"
-            RiskLevel.CRITICAL -> "#E24B4B"
-            RiskLevel.UNKNOWN -> "#8A8A8A"
-        }
+        // 风险色统一走 ChartPalette。这里原本是**第三份**等级→颜色 when，
+        // 且 CRITICAL 写成 `#E24B4B`、而 ChartPalette.FAIL 是 `#E24B4A` —— 已经差了一个字符，
+        // 正是「同一判据存三份」必然走岔的证据。导出件是白底，所以取浅底档。
+        val riskColor = ChartPalette.toHex(ChartPalette.riskColor(report.riskLevel))
         append("<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\">")
         append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
         append("<title>AISecLab 测评报告</title><style>")

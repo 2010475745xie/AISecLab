@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab.core.report
 
+import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.Verdict
 import java.util.Locale
 
@@ -19,12 +20,50 @@ import java.util.Locale
  * - **深浅 = 置信度**（越深越确定）。`confidence` 是**用例级**的判定置信度，
  *   不是逐 token 危险度 —— 图表标题与图例都要说清楚，别让读者以为是过程量。
  */
+/**
+ * 语义槽位 —— 「这个结论/等级该用哪一类颜色」的**全项目唯一判据**。
+ *
+ * 抽它的原因：同一份 `RiskLevel → 颜色` 映射此前在 `HomeScreen`、`ReportScreen`、
+ * `ReportGenerator` 里**各写了一遍**（三个 `when`，五个分支一字不差），改一个忘两个
+ * 只是时间问题 —— 而它**已经发生过**：`ReportGenerator` 写的是 `#E24B4B`，
+ * `ChartPalette.FAIL` 是 `#E24B4A`，差了一个字符。
+ *
+ * 现在各处只负责"这个槽位在我这套配色里是哪个值"：
+ * · 导出件（白底）→ [ChartPalette] 的常量；
+ * · App 界面 → `ui.theme.SemanticColors`（随明暗主题切换，深底要用亮档）。
+ */
+enum class SemanticSlot { GOOD, CAUTION, HIGH, BAD, NEUTRAL }
+
 object ChartPalette {
 
     const val PASS = 0xFF1D9E75
     const val FAIL = 0xFFE24B4A
     const val INCONCLUSIVE = 0xFFBA7517
     const val SKIPPED = 0xFF8A8A8A
+
+    /** 高风险 —— 介于「拿不准」与「严重」之间，即报告页一直在用的那支橙。 */
+    const val HIGH = 0xFFD85A30
+
+    /** 风险等级 → 语义槽位。**唯一判据**；各处别再来一份 `when (riskLevel)`。 */
+    fun slotOf(level: RiskLevel): SemanticSlot = when (level) {
+        RiskLevel.LOW -> SemanticSlot.GOOD
+        RiskLevel.MEDIUM -> SemanticSlot.CAUTION
+        RiskLevel.HIGH -> SemanticSlot.HIGH
+        RiskLevel.CRITICAL -> SemanticSlot.BAD
+        RiskLevel.UNKNOWN -> SemanticSlot.NEUTRAL
+    }
+
+    /**
+     * 浅底用的风险色（HTML 导出 / 浅色主题）。
+     * 深色主题请走 `SemanticTheme.colors.risk(level)` —— 深底上要用亮档。
+     */
+    fun riskColor(level: RiskLevel): Long = when (slotOf(level)) {
+        SemanticSlot.GOOD -> PASS
+        SemanticSlot.CAUTION -> INCONCLUSIVE
+        SemanticSlot.HIGH -> HIGH
+        SemanticSlot.BAD -> FAIL
+        SemanticSlot.NEUTRAL -> SKIPPED
+    }
 
     // 深浅两端（PASS / FAIL 各自一条渐变），中间值由置信度插出来
     private const val PASS_LIGHT = 0xFFA8E0CE
