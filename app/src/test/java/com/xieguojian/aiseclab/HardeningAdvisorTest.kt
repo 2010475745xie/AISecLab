@@ -197,4 +197,38 @@ class HardeningAdvisorTest {
         // c3 没有逐轮记录 → 不可归因 1 条
         assertEquals(1, r.unattributed)
     }
+
+    @Test
+    fun 不可归因的条数已经在卡片里数过_说明文案不许写成另有() {
+        // 口径：unattributed 数的是失守里「定位不出层」的那些，而它们**已经在 items 里**
+        // 各自拿到一条策略级建议了 → `unattributed <= covered` 恒成立，且同一条失守只列一次。
+        // 报告页 / Markdown / HTML 三处都念 [HardeningReport.unattributedNote]，所以钉住这一份文案，
+        // 三处就都不会写出「失守 1 条 + 1 条中招 + 另有 1 条失守」这种自己跟自己打架的话。
+        //（2026-10-14 真机读到过这个措辞，还被导出侧单测锁着，所以一直没暴露。）
+        val r = HardeningAdvisor.advise(
+            listOf(
+                attack("u1", strategy = JailbreakStrategy.ENCODING, refusedRounds = emptyList()),
+                attack("u2", strategy = JailbreakStrategy.NONE, refusedRounds = emptyList()),
+                attack("u3", refusedRounds = listOf(false))          // 一步就破 → 输出层，可归因
+            )
+        )
+        // 三条失守 → 三个「策略 × 层」组合 → 三张卡，一条都不多不少
+        assertEquals("同一条失守不该出现在两张卡里", 3, r.items.size)
+        assertEquals(3, r.covered)
+        assertEquals(2, r.unattributed)
+        assertTrue("不可归因条数不可能超过已覆盖条数：$r", r.unattributed <= r.covered)
+
+        val note = r.unattributedNote
+        assertTrue("应报出不可归因条数：$note", note.contains("其中 2 条失守没能定位到失效层"))
+        assertFalse("「另有」会把已经数过的失守再数一遍：$note", note.contains("另有"))
+        assertTrue("要说清怎么才能拿到分层归因：$note", note.contains("跑多轮"))
+    }
+
+    @Test
+    fun 没有不可归因的失守时说明为空串() {
+        // 空串 = 「不用渲染这一行」，调用方据此判断；不是「0 条」占位。
+        val r = HardeningAdvisor.advise(listOf(attack("a1", refusedRounds = listOf(false))))
+        assertEquals(0, r.unattributed)
+        assertEquals("", r.unattributedNote)
+    }
 }

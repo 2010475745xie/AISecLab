@@ -57,6 +57,8 @@ fun HomeScreen(
 ) {
     val state by vm.testState.collectAsState()
     val history by vm.history.collectAsState()
+    // false = 历史还在读盘。**必须**与「history 为空」分开判断：空表的初值不是"没有历史"。
+    val historyLoaded by vm.historyLoaded.collectAsState()
     val target by vm.target.collectAsState()
     val tokens by TokenMeter.state.collectAsState()
     val timeFmt = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
@@ -100,7 +102,21 @@ fun HomeScreen(
             Text("历史记录（已测试）", style = MaterialTheme.typography.titleMedium)
         }
 
-        if (history.isEmpty()) {
+        // ⚠️ 「还没读完」与「确实没有」必须分开说（与判定链那条铁律同源）：
+        // [TestViewModel.history] 的初值是空表，读盘在 Dispatchers.IO 上，所以冷启动时
+        // 列表为空的**头一秒**并不是"没有历史"，只是"还没读完"。合在一起说的后果实测过：
+        // 2026-10-14 装机后冷启动，界面先渲染「还没有历史报告」约 0.5~1 秒才切成列表
+        // （两次实测 2.17s→3.10s、2.31s→2.88s，13 份报告 × 85 KB JSON），
+        // 当时我自己第一眼都以为装机把历史清空了。说一句假话比晚说一秒糟得多。
+        if (!historyLoaded) {
+            item {
+                Text(
+                    "正在读取历史报告…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else if (history.isEmpty()) {
             item {
                 Text(
                     "还没有历史报告。点右下角 + 开始一轮测试，跑完会自动存档到这里。",

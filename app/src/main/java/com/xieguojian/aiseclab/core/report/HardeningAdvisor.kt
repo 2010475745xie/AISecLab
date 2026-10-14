@@ -62,6 +62,25 @@ object HardeningAdvisor {
         val isEmpty: Boolean get() = items.isEmpty()
         /** 覆盖的失守总条数（= 各 item 的 cases 之和）。 */
         val covered: Int get() = items.sumOf { it.cases }
+
+        /**
+         * 「定位不出失效层」的说明；没有这种情况时为空串（调用方自行判断要不要渲染）。
+         *
+         * ⚠️ 措辞必须是「**其中** N 条」而不是「另有 N 条」：`unattributed` 数的是失守里
+         * [layer] 为 null 的那些，而那些用例**已经在 [items] 里各自拿到一条策略级建议了**
+         * （所以 `unattributed <= covered` 恒成立）。写成「另有」，报告上就会同时出现
+         * 「失守 1 条」+「1 条中招」+「另有 1 条失守」→ 读起来像 2 条失守，
+         * 一份取证报告自己跟自己打架。**2026-10-14 真机读到过这个措辞**（当时报告失守 1 条，
+         * 加固建议却写着「另有 1 条」，且这句被单测锁着，所以一直没暴露）。
+         *
+         * 文案在这里**唯一**：报告页 / Markdown / HTML 三处都念这一份
+         * （做法同 [ErosionCurve.exclusionNote] —— 同一句话抄三遍必然走岔，
+         * 当时 HTML 侧就漏了「跑多轮…」那半句、还把「上面的建议」写成了「上述建议」）。
+         */
+        val unattributedNote: String
+            get() = if (unattributed == 0) "" else
+                "其中 $unattributed 条失守没能定位到失效层（没有逐轮记录），" +
+                    "这些用例的建议只到策略级；跑多轮（配辅助模型 + 打开递归对抗）才能拿到分层归因。"
     }
 
     /** 按策略族的加固方案。8 个策略族一个不落，保证任何一条失守都能拿到建议。 */

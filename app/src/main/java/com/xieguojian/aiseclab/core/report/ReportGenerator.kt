@@ -106,9 +106,11 @@ object ReportGenerator {
                 append("${item.action}\n\n")
                 item.snippet?.let { append("可直接粘进系统提示：\n\n> $it\n\n") }
             }
-            if (hardening.unattributed > 0) {
-                append("> 另有 ${hardening.unattributed} 条失守没能定位到失效层（没有逐轮记录），")
-                append("上述建议只到策略级；跑多轮（配辅助模型 + 打开递归对抗）才能拿到分层归因。\n\n")
+            // 文案唯一源：HardeningReport.unattributedNote —— 报告页 / Markdown / HTML 三处同源。
+            // 这里过去自己拼过一遍，结果三处走岔：HTML 侧漏了「跑多轮…」那半句，
+            // 而且三处都把「其中」写成了「另有」（那份报告失守 1 条，读起来像 2 条）。
+            if (hardening.unattributedNote.isNotEmpty()) {
+                append("> ${hardening.unattributedNote}\n\n")
             }
         }
 
@@ -411,9 +413,9 @@ object ReportGenerator {
                 }
                 append("</div>")
             }
-            if (hardening.unattributed > 0) {
-                append("<p class=\"meta\">另有 ${hardening.unattributed} 条失守没能定位到失效层（没有逐轮记录），")
-                append("上述建议只到策略级。</p>")
+            // 文案唯一源：HardeningReport.unattributedNote（注释同上）。
+            if (hardening.unattributedNote.isNotEmpty()) {
+                append("<p class=\"meta\">${escapeHtml(hardening.unattributedNote)}</p>")
             }
         }
 

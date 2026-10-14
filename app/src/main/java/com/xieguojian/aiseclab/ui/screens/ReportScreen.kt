@@ -785,11 +785,12 @@ private fun HardeningPanel(hardening: HardeningAdvisor.HardeningReport) {
     Column {
         hardening.items.forEach { item -> HardeningCard(item) }
         // 定位不出失效层的条数必须单独说，不能静默吞掉：那是「没测到」，不是「没有」。
+        // 文案取自 HardeningReport.unattributedNote —— 与两个导出件同源，这里不自己拼字符串
+        //（拼三遍就会走岔；而且「其中」和「另有」差一个字，报告就自相矛盾了）。
         if (hardening.unattributed > 0) {
             Spacer(Modifier.height(4.dp))
             Text(
-                "另有 ${hardening.unattributed} 条失守没能定位到失效层（没有逐轮记录），上面的建议" +
-                    "只到策略级。跑多轮（配辅助模型 + 打开递归对抗）才能拿到分层归因。",
+                hardening.unattributedNote,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

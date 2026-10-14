@@ -15,6 +15,7 @@ import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.report.DefenseAttribution
 import com.xieguojian.aiseclab.core.report.DefenseLayer
+import com.xieguojian.aiseclab.core.report.HardeningAdvisor
 import com.xieguojian.aiseclab.core.report.ReportGenerator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -116,6 +117,8 @@ class ReportGeneratorHardeningTest {
         val caseA = r.results.single { it.testCase.id == "plan" }
         val caseB = r.results.single { it.testCase.id == "once" }
         assertEquals(DefenseLayer.PLANNING, DefenseAttribution.layerOf(caseA))
+        // 对称的一条：一步就破 → 输出层。少了它，「只对一种归因下断言」会漏掉另一半走岔。
+        assertEquals(DefenseLayer.OUTPUT, DefenseAttribution.layerOf(caseB))
 
         val md = ReportGenerator.toMarkdown(r)
         val html = ReportGenerator.toHtml(r)
@@ -135,9 +138,20 @@ class ReportGeneratorHardeningTest {
         // 条目本身：定位不出层 → 写「定位不出失效层」/「先失效层不可归因」，而不是默认塞一层
         assertTrue("Markdown 条目应标出定位不出层：\n$md", md.contains("定位不出失效层"))
         assertTrue("HTML 条目应标出不可归因：\n$html", html.contains("先失效层不可归因"))
-        // 汇总：另有 N 条不可归因，两侧都要写（"没测到"必须可见，不能退化成沉默）
-        assertTrue("Markdown 应报不可归因条数：\n$md", md.contains("另有 1 条失守没能定位到失效层"))
-        assertTrue("HTML 应报不可归因条数：\n$html", html.contains("另有 1 条失守没能定位到失效层"))
+        // 汇总：N 条不可归因，两侧都要写（"没测到"必须可见，不能退化成沉默）。
+        // ⚠️ 措辞必须是「**其中** N 条」，不能是「另有 N 条」—— 本用例里那 1 条失守
+        // **已经**在上面那张「1 条中招」的卡片里数过一次了；写成「另有」，报告正文说「失守 1 条」、
+        // 加固建议却让人读成 2 条，自己跟自己打架。2026-10-14 真机读到过这个措辞，
+        // 而它当时正被本测试的前一版锁着，所以一直没暴露。
+        assertTrue("Markdown 应报不可归因条数：\n$md", md.contains("其中 1 条失守没能定位到失效层"))
+        assertTrue("HTML 应报不可归因条数：\n$html", html.contains("其中 1 条失守没能定位到失效层"))
+        assertFalse("「另有」会把已计过数的失守再数一遍：\n$md", md.contains("另有"))
+        assertFalse("「另有」会把已计过数的失守再数一遍：\n$html", html.contains("另有"))
+        // 三处同源：两个导出件里这句话必须**逐字**来自 HardeningReport.unattributedNote。
+        // 过去三处各拼一遍，HTML 侧就漏了「跑多轮…」那半句、「上面的建议」还写成了「上述建议」。
+        val note = HardeningAdvisor.advise(r.results).unattributedNote
+        assertTrue("这句说明必须是唯一文案（md 没念到）：$note", md.contains(note))
+        assertTrue("这句说明必须是唯一文案（html 没念到）：$note", html.contains(note))
     }
 
     // ── 5. 两个导出件的建议条目数必须一致（同源就有同一个数）──

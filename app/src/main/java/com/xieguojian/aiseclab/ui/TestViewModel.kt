@@ -127,6 +127,18 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     private val _history = MutableStateFlow<List<Report>>(emptyList())
     val history: StateFlow<List<Report>> = _history.asStateFlow()
 
+    /**
+     * 历史列表是否**已经读完过至少一次**。false = 还在读盘。
+     *
+     * 为什么必须有这一位：[_history] 的初值是空表，而读盘在 [Dispatchers.IO] 上 ——
+     * 只看 `history.isEmpty()` 的话，「还没读完」和「确实没有」是同一种界面，
+     * 冷启动时会先对用户说一句「还没有历史报告」再改口。2026-10-14 装机冷启动实测：
+     * 空态被渲染了约 0.5~1 秒（13 份报告、每份 ~85 KB JSON）才切成列表。
+     * 与判定链那条铁律同源：**「没采到」不能当成「没有」**。
+     */
+    private val _historyLoaded = MutableStateFlow(false)
+    val historyLoaded: StateFlow<Boolean> = _historyLoaded.asStateFlow()
+
     /** 基线对比：选定的历史报告；null = 不做对比。 */
     private val _baseline = MutableStateFlow<Report?>(null)
     val baseline: StateFlow<Report?> = _baseline.asStateFlow()
@@ -138,7 +150,15 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
      * 就会出现「退出重进后历史列表空着，非得跑完一轮才出现」。
      */
     fun refreshHistory() {
-        viewModelScope.launch(Dispatchers.IO) { _history.value = historyRepo.list() }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                _history.value = historyRepo.list()
+            } finally {
+                // 即使读取抛错也要落下这一位：否则界面永远卡在「正在读取历史报告…」，
+                // 用户连「确实没有」都无法确认，比看到一份空列表更糟。
+                _historyLoaded.value = true
+            }
+        }
     }
 
     /**
