@@ -27,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.xieguojian.aiseclab.core.model.Report
@@ -209,10 +210,15 @@ fun ReportScreen(
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(14.dp)) {
                         Text("已导出：${file.name}", style = MaterialTheme.typography.bodyMedium)
+                        // 落盘路径在手机窄屏下必然超一行，且路径里没有可断行的空格，
+                        // Compose 会直接按字符硬断 —— 视觉上是一条破折的乱码串。
+                        // 给 2 行上限 + 省略号（Compose BOM 2024.06 无 MiddleEllipsis）。
                         Text(
                             file.absolutePath,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Spacer(Modifier.height(8.dp))
                         Row {
@@ -517,15 +523,25 @@ fun ReportScreen(
                 Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            // 标题可能长达几十字。无上限时它会换行把行高撑起，
+                            // 而右侧"N 步 · verdict"是单行且垂直居中 → 两栏错位。
+                            // 给 2 行上限，两栏高度都可预期。
                             Text(
                                 "${r.testCase.dimension.label} · ${r.testCase.title}",
                                 style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
+                            // verdict 最长的是 INCONCLUSIVE（12 字）。这一栏没有宽度上限，
+                            // 会把左侧 weight(1f) 压到几乎没宽度 —— 左侧变成"..."而右侧完整，
+                            // 正好把最有信息量的用例标题让给了枚举名。
                             Text(
                                 "${r.attackRounds.size} 步 · ${r.judgeResult.verdict}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Spacer(Modifier.height(8.dp))
