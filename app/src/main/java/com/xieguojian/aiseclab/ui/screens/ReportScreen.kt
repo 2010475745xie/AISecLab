@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
@@ -157,14 +158,25 @@ fun ReportScreen(
     val hardening = remember(report) { HardeningAdvisor.advise(sections.fails) }
 
     // 大屏（平板）上限宽：不限宽时一行正文能拉到 1000dp 以上，眼睛得来回扫。
-    // ⚠️ `widthIn` 必须写在 `fillMaxSize` **之前** —— 反过来的话 fillMaxSize 已经把
-    // minWidth 顶到父宽，widthIn 的 max 会被 coerceIn 夹回去、**完全失效**（Compose 约束
-    // 传播是外→内逐层收窄的）。
+    // 「限宽 + 居中」的完整写法与顺序约束见下面修饰符链上的注释。
     // 手机宽度（≈360~420dp）够不到这个上限，所以对手机**零影响**。
     LazyColumn(
         Modifier
-            .widthIn(max = CONTENT_MAX_WIDTH)
+            // 三个修饰符各管一件事，**顺序不能动**：
+            //  1) `fillMaxSize()` 让列表占满屏幕（副作用：把子项的 minWidth 顶到父宽）；
+            //  2) `wrapContentWidth(...)` 把"给子项的 minWidth"重新放回 0 —— 少了它，第 3 步的
+            //     max 会被父约束 coerceIn 夹回去、上限**完全失效**（这条 2026-10-12 踩过）；
+            //     同时它负责**居中**：`widthIn` 只能限宽，"内容摆在父容器的哪一侧"是父容器说了算的，
+            //     而这里没有外层容器 —— 于是宽屏下内容贴左、右侧糊一大片空白。
+            //     2026-10-14 在等效 1067dp 宽（wm size/density 覆盖）下实测：
+            //       加之前 内容块 x=[30,1229]  → 左 20dp / 右 247dp（贴左，右边糊一大片）
+            //       加之后 内容块 x=[200,1399] → 左 133dp / 右 133dp（对称）
+            //     限宽本身没被破坏：两版的内容宽都是 799dp = 840dp 上限 − 两侧 20dp 内边距。
+            //     （这与当年"空状态顶在左上角、平板上尤其像页面没加载完"是同一个问题。）
+            //  3) `widthIn(max = CONTENT_MAX_WIDTH)` 才是真正的限宽；`padding` 收在最内层。
             .fillMaxSize()
+            .wrapContentWidth(androidx.compose.ui.Alignment.CenterHorizontally)
+            .widthIn(max = CONTENT_MAX_WIDTH)
             .padding(20.dp)
     ) {
         item {
