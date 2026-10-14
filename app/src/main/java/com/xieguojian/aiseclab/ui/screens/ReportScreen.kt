@@ -82,8 +82,20 @@ fun ReportScreen(
     var showMatrix by remember { mutableStateOf(false) }
 
     if (report == null) {
-        Column(Modifier.fillMaxSize().padding(20.dp)) {
-            Text("暂无报告", style = MaterialTheme.typography.headlineMedium)
+        // 空状态**居中**：原先顶在左上角，平板上尤其像"页面没加载完"。
+        Column(
+            Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+        ) {
+            Text("暂无报告", style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "跑完一轮测试后，这里会显示测评报告。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
             TextButton(onClick = onBack) { Text("返回测试") }
         }
         return
@@ -175,7 +187,7 @@ fun ReportScreen(
                 )
                 Text(" / 100", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 8.dp))
                 Spacer(Modifier.weight(1f))
-                Text(riskText(report.riskLevel), color = riskColor, style = MaterialTheme.typography.titleMedium)
+                Text(report.riskLevel.label, color = riskColor, style = MaterialTheme.typography.titleMedium)
             }
             Spacer(Modifier.height(16.dp))
             // 三个导出按钮**分两行**：手机可用宽度约 320dp，「导出 HTML / 导出 Markdown / 导出 JSON」
@@ -984,10 +996,3 @@ private fun levelLabel(level: JudgeLevel): String = when (level) {
     JudgeLevel.LLM -> "LLM 裁判"
 }
 
-private fun riskText(level: RiskLevel): String = when (level) {
-    RiskLevel.LOW -> "低风险"
-    RiskLevel.MEDIUM -> "中风险"
-    RiskLevel.HIGH -> "高风险"
-    RiskLevel.CRITICAL -> "严重风险"
-    RiskLevel.UNKNOWN -> "无法评级"
-}

@@ -79,17 +79,25 @@ data class DimensionScore(
     val notableFindings: List<String>
 )
 
+/**
+ * 风险等级。
+ *
+ * [label] 是**全项目唯一**的中文说法：此前 `HomeScreen` / `ReportScreen` /
+ * `ReportGenerator` 各写了一份 `riskText()`（三个 `when` 一字不差）—— 改文案时漏掉一个，
+ * 用户就会在同一屏上看到两种说法。与 [Dimension] / `JailbreakStrategy` 一样，
+ * 把展示名挂在枚举上，而不是让每个渲染处各持一份。
+ */
 @Serializable
-enum class RiskLevel {
-    @SerialName("low") LOW,
-    @SerialName("medium") MEDIUM,
-    @SerialName("high") HIGH,
-    @SerialName("critical") CRITICAL,
+enum class RiskLevel(val label: String) {
+    @SerialName("low") LOW("低风险"),
+    @SerialName("medium") MEDIUM("中风险"),
+    @SerialName("high") HIGH("高风险"),
+    @SerialName("critical") CRITICAL("严重风险"),
 
     /**
      * 无法评级：一条样本都没评估成功（全部接口调用失败 / 限流 / 超时）。
      * 必须与 CRITICAL 区分开 —— "没测到"和"测出来很糟"是两回事，
      * 把前者显示成"严重风险"正是这份报告之前最大的误导。
      */
-    @SerialName("unknown") UNKNOWN
+    @SerialName("unknown") UNKNOWN("无法评级")
 }

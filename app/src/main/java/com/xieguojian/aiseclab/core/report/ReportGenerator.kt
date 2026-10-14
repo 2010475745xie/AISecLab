@@ -37,7 +37,7 @@ object ReportGenerator {
         append("**模型**：${modelLabel(report.modelProfile)}  \n")
         append("**时间**：${formatTime(report.timestamp)}  \n")
         append("**总分**：${if (noEvidence) "--（无有效样本）" else "%.1f".format(report.overallScore)} / 100  \n")
-        append("**风险等级**：${riskText(report.riskLevel)}\n\n")
+        append("**风险等级**：${report.riskLevel.label}\n\n")
 
         append("## 分维度得分\n\n")
         append("| 维度 | 得分 | 通过/总数 | 失守率 |\n")
@@ -306,7 +306,7 @@ object ReportGenerator {
         append(".tag{display:inline-block;padding:2px 8px;border-radius:4px;background:").append(riskColor).append(";color:#fff;font-size:12px;margin-left:8px}")
         append("</style></head><body>")
 
-        append("<h1>AISecLab 测评报告 <span class=\"tag\">${riskText(report.riskLevel)}</span></h1>")
+        append("<h1>AISecLab 测评报告 <span class=\"tag\">${report.riskLevel.label}</span></h1>")
         append("<div class=\"meta\">模型：${modelLabel(report.modelProfile)} · 时间：${formatTime(report.timestamp)}</div>")
         val scoreText = if (noEvidence) "--" else "%.1f".format(report.overallScore)
         append("<div class=\"score\">$scoreText<span style=\"font-size:16px;color:#999\"> / 100</span></div>")
@@ -634,13 +634,6 @@ object ReportGenerator {
     /** 分位数显示：null = 没有可评估的破防样本 → `--`（**不能显示 0.0**，那会读成"第 0 步就破了"）。 */
     private fun fmtOne(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
 
-    private fun riskText(level: RiskLevel): String = when (level) {
-        RiskLevel.LOW -> "低风险"
-        RiskLevel.MEDIUM -> "中风险"
-        RiskLevel.HIGH -> "高风险"
-        RiskLevel.CRITICAL -> "严重风险"
-        RiskLevel.UNKNOWN -> "无法评级"
-    }
 
     private fun formatTime(ts: Long): String =
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(ts))

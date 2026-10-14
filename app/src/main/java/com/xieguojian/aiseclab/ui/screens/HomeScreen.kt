@@ -225,7 +225,7 @@ private fun HistoryItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    "通过 $totalPassed/$totalCases · ${riskText(report.riskLevel)}",
+                    "通过 $totalPassed/$totalCases · ${report.riskLevel.label}",
                     style = MaterialTheme.typography.bodySmall,
                     color = riskColor
                 )
@@ -244,10 +244,3 @@ private fun HistoryItem(
     }
 }
 
-private fun riskText(level: RiskLevel): String = when (level) {
-    RiskLevel.LOW -> "低风险"
-    RiskLevel.MEDIUM -> "中风险"
-    RiskLevel.HIGH -> "高风险"
-    RiskLevel.CRITICAL -> "严重风险"
-    RiskLevel.UNKNOWN -> "无法评级"
-}
