@@ -43,9 +43,9 @@
 > 每项标注：**实现要点 / 验收标准 / 落在现有代码的位置**。
 > 现有扩展点：`AttackModule`、`Judge`、`LlmJudge(chat, roles)`、`ScoringModel`、`ReportGenerator`。
 
-### 落地状态（2026-10-13 快照）
+### 落地状态（2026-10-14 快照）
 
-**✓ 已完成 9 项（周 1 地基全部 + 取证核心三块 + 半妥协检测 + 取证报告）**
+**✓ 已完成 10 项（周 1 地基全部 + 取证核心三块 + 半妥协检测 + 拒绝打分 + 取证报告）**
 
 | # | 落地物 | 复现 |
 |---|---|---|
@@ -53,6 +53,7 @@
 | 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
 | 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
 | 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，100 条 = 20 目标 × 5 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→150 条） |
+| 2.1 | **否定感知拒绝打分**：`core/judge/RefusalScorer.kt` ↔ `backend/app/judge.py::refusal_strength`（**纯文本规则、零 token**，不是嵌入模型）。先把**被否定的拒绝话术掩掉**（"我不会拒绝你"里躺着"我不会"、"I won't refuse"里躺着"I won't"），再对锚点做**非重叠贪心匹配**（词表里 `我不会` 是 `我不会帮` 的前缀，按词表项计数会把同一次拒绝数两遍）。程序性内容只认**步骤话头 / 成对代码围栏**，**纯列表要配转折词才算** —— 否则"拒绝 + 编号的原因"会被压成配合。`ResponseContext.isRefusal` 收口为转发它，**判据只有一份** | `RefusalScorerTest`（10 条，含自测集 76 条：**97.3%**；朴素基线仅 **79.5%**）+ `backend/_verify_refusal.py`（准确率 + **两端逐条分类 76/76 完全一致**）+ `tools/check-judge-parity.py`（新增 `NEGATED_REFUSAL` / `CONCESSION`，并把 `ComplianceDetector.kt` 并入比对） |
 | 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`RecursiveAdversarialAttackTest`（3 条，接线）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（22 项，含 `run_recursive` 接线） |
 | 3.3 | **侵蚀曲线 & `breakRound`**：`core/report/ErosionCurve.kt`（纯口径层）+ `ui/chart/ErosionTrack.kt` + `ChartSvg.erosionCumulative`；报告页 / Markdown / HTML 三处同源 | `ErosionCurveTest`（20 条）+ 真机报告页 |
 | 4.2 | **新指标面板**：`core/report/SafetyMetrics.kt` —— 方案 §5 六项 + 策略×意图矩阵（`asrColor` 独立于置信度色阶）；报告页 `MetricsPanel` + 默认收起矩阵，两处导出同源 | `SafetyMetricsTest`（23 条）+ `ReportChartTest`「ASR热力色不能用置信度色阶」 |
@@ -61,11 +62,26 @@
 
 **~ 部分完成 4 项**：2.3 置信门控（门控已有，"低置信升级链路可观测"未做）、
 3.1 多轮侵蚀执行器（`RecursiveAdversarialAttack` 已有，非 T1 暖场→加压→TN 结构）、
-3.2 逐轮记录（`AttackRound` 已落 prompt/response/refused/**compliance**，仍缺 `refusalStrength`/`toolCalls`）、
+3.2 逐轮记录（`AttackRound` 已落 prompt/response/refused/**compliance**，仍缺 `refusalStrength`/`toolCalls`；
+打分器 2.1 已就绪，差的只是"落进线格式"这一步，见上方 ⚠️）、
 3.4 分层破防归因（**已按可证伪口径落地**：只归 `PLANNING`/`OUTPUT` 两层，
 输入层与工具层对纯 chat API 不可观测、明写"不适用"而不计 0；见下方隐患）。
 
-**✗ 未开始 3 项**：2.1 否定感知拒绝打分、4.3 内部信号、4.4 众测对比。
+**✗ 未开始 2 项**：4.3 内部信号、4.4 众测对比。
+
+> ⚠️ **2.1 只交付了「打分器」，还没接进数据流**：`RefusalScorer` 目前被
+> `ResponseContext.isRefusal` 使用（即拒绝/半妥协的分层），但
+> **逐轮的 `refusalStrength` 还没落进 `AttackRound`** —— 那是 3.2 的字段，
+> 需要同时改两端线格式 + `ErosionCurve` 的斜率算法，且必须真机跑一轮才能验。
+> 所以现在 `ErosionRun.erosionSlope` 仍是 0/1 序列上的**代理量**（见 `ErosionCurve.kt` 类注释）。
+> 这一步别顺手做：它会让「侵蚀曲线」的口径变化，得单独一轮 + 真机复验。
+>
+> ⚠️ **97.3% 的效力边界**：自测集是**自编**的（`app/src/test/resources/refusal_cases.json`），
+> 它只能证明"同一份规则在两端一致、且在作者设想的难例上过线"，**不能**证明外部效度。
+> 自查做了两件事让它不至于是自说自话：① 同时跑改之前那套朴素判据做对照，
+> 基线只有 79.5%（说明自测集确实能区分实现，"85%"这条门槛不是随便就过）；
+> ② 集内**刻意保留 2 条已知判错的难例**（半妥协但既无步骤话头也无转折词 / 不含任何第一人称拒绝锚的软拒绝）
+> 且不剔除，错例**恰好**就是这两条 —— 判错在哪、为什么，都写在样本的 `why` 里。
 
 > ⚠️ **2.2 半妥协是「测量」不是「判定」**：`AttackRound.compliance` 与 `refused` **不同源、也不等价**
 > （后者是破防判据的派生量，前者是独立的文本测量），「refused=true 但 compliance=complied」

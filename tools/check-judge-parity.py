@@ -35,6 +35,11 @@ KT_FILES = [
                  "core", "judge", "L1PatternRules.kt"),
     os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
                  "core", "judge", "ResponseContext.kt"),
+    # ComplianceDetector.kt ↔ compliance.py 是既有的镜像对，但它不是本脚本的 PY_FILE，
+    # 所以它的三条正则此前**没有任何机械校验**。2.1 起 `judge.py` 也要用这三条正则
+    # （refusal_strength 判断程序性内容），于是把它们并进 PY_FILE 一并校验。
+    os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
+                 "core", "judge", "ComplianceDetector.kt"),
 ]
 
 
@@ -181,6 +186,16 @@ TABLES = [
     ("STRONG_REFUSAL", "str"),
     ("NEGATION_MARKERS", "str"),
     ("CONTEXT_WINDOW", "int"),
+    # 2.1 否定感知拒绝打分（ResponseContext.kt + RefusalScorer.kt）
+    # ⚠️ 词表一致**不等于**行为一致 —— 2.1 的算法有 4 个可调项
+    # （基础分/每锚点增量/开头加分/程序性扣分）。行为级比对在
+    # `backend/_verify_refusal.py`：它拿同一份自测集比两端逐条分类结果。
+    ("NEGATED_REFUSAL", "str"),
+    ("CONCESSION", "regex"),
+    # 程序性内容的原语（ComplianceDetector.kt ↔ judge.py）
+    ("LIST_ITEM_RE", "regex"),
+    ("STEP_HINT_RE", "regex"),
+    ("MIN_LIST_ITEMS", "int"),
     # L1 层（L1PatternRules.kt）
     ("SYSTEM_PROMPT_MARKERS", "str"),
     ("KEY_PATTERNS", "regex"),
