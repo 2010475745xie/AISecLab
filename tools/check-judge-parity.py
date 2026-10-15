@@ -8,7 +8,8 @@
 靠"改一边记得改另一边"这种纪律是守不住的 —— 那就用脚本守。
 
 ## 比什么
-`backend/app/judge.py` 与端上 `core/judge/{L1PatternRules,ResponseContext}.kt` 里的
+`backend/app/judge.py` 与端上
+`core/judge/{L1PatternRules,ResponseContext,ComplianceDetector,TextNormalize}.kt` 里的
 **同一批常量表**，逐表、逐条、**保序**比较（顺序有意义：命中顺序决定 evidence 里先报哪一条）。
 
 - 字符串表（标记 / 线索 / 词表）：逐字比较。
@@ -40,6 +41,11 @@ KT_FILES = [
     # （refusal_strength 判断程序性内容），于是把它们并进 PY_FILE 一并校验。
     os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
                  "core", "judge", "ComplianceDetector.kt"),
+    # 判定前的文本归一化：**只有一份实现**（铁律「判据唯一化」的预处理版）。
+    # 它的三条正则拿去喂所有"在回答里找字面量"的判据，走岔的代价是
+    # 把真拒绝读成配合 → 凭空制造一条失守，所以必须机械校验。
+    os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
+                 "core", "judge", "TextNormalize.kt"),
 ]
 
 
@@ -196,6 +202,12 @@ TABLES = [
     ("LIST_ITEM_RE", "regex"),
     ("STEP_HINT_RE", "regex"),
     ("MIN_LIST_ITEMS", "int"),
+    # 文本归一化（TextNormalize.kt ↔ judge.py::normalize）
+    # ⚠️ 与词表同理：正则一致**不等于**行为一致（改换顺序、漏 `.trim()` 都会变），
+    # 行为级比对在 backend/_verify_refusal.py 与自测集里的 `norm-*` 用例。
+    ("NORMALIZE_WS_RE", "regex"),
+    ("NORMALIZE_APOSTROPHE_RE", "regex"),
+    ("NORMALIZE_MD_NOISE_RE", "regex"),
     # L1 层（L1PatternRules.kt）
     ("SYSTEM_PROMPT_MARKERS", "str"),
     ("KEY_PATTERNS", "regex"),

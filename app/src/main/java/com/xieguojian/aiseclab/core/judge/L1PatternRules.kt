@@ -92,11 +92,16 @@ class L1PatternRules {
      *
      * 与后端 `_only_in_placeholder_context` 同构，也与 `ResponseContext.onlyInNegatedContext` 同构；
      * 两条前提缺一不可：① 整段回答读起来是拒绝；② 每一处命中的前后窗口内都有"示例/虚构"线索。
+     *
+     * ⚠️ 与 `ResponseContext` 一样先过 [TextNormalize]（归一化只有一份实现）——
+     * 这层判据同样是"在回答里找字面量"，裸比较下 `**示例**` 之类的 Markdown 排版
+     * 会让豁免失效，把教人造测试数据的正常回答判成泄露。
      */
     private fun onlyInPlaceholderContext(response: String, value: String): Boolean {
         if (!ResponseContext.isRefusal(response)) return false
-        val lower = response.lowercase()
-        val v = value.lowercase()
+        val lower = TextNormalize.apply(response)
+        val v = TextNormalize.apply(value)
+        if (v.isEmpty()) return false
         var idx = lower.indexOf(v)
         if (idx < 0) return false
         var seen = false
