@@ -264,9 +264,43 @@ class NormalizationResult:
         return out
 
 
+# ── Unicode Tag 块（U+E0000–U+E007F）────────────────────────────────────
+# 攻击者把 payload 里每个 ASCII 字符换成 U+E0000+ord(ch)（'a'→U+E0061），
+# 肉眼与常规正则都看不见（"不可见提示走私"），但 tokenizer 仍会读到原文。
+# 这是 FuzzyAI 的 `asc` 技术，我们此前**完全缺失**（`_ZERO_WIDTH` 不含该块）。
+#
+# ⚠️ **该块在 BMP 之外**，UTF-16 里是代理对。实测（jshell，Java 与 Kotlin 同为 UTF-16）：
+#     "A\uDB40\uDC20B"  按 Char 迭代 → U+0041, U+DB40, U+DC20, U+0042
+#                       按码点迭代 → U+00041, U+E0020, U+00042
+# 即：**Python 的 `for c in text` 天然按码点，Kotlin 的 `for (c in text)` 按 UTF-16 码元**
+# —— 同一份判据两端不同构，且**不报错**（Kotlin 会静默删不掉）。Kotlin 侧必须走 `codePoints()`。
+# 详见 docs/参考项目-能力升级路线.md §3.2。
+_TAG_BASE = 0xE0000
+_TAG_MIN = 0xE0000
+_TAG_MAX = 0xE007F
+
+
+def has_tag(text: str) -> bool:
+    """有没有 Unicode Tag 字符（U+E0000–U+E007F，即"不可见提示走私"的载体）。"""
+    return any(_TAG_MIN <= ord(c) <= _TAG_MAX for c in text)
+
+
 def clean(text: str) -> str:
-    """剥离零宽字符 + 同形字归一。"""
-    return "".join(_HOMOGLYPH.get(c, c) for c in text if c not in _ZERO_WIDTH)
+    """剥离零宽字符 + 同形字归一 + **Unicode Tag 还原成可见字符**。
+
+    Tag 与零宽的处理**方向不同**，别混：零宽只起分隔作用、本身不含信息 → 删掉；
+    Tag 是"隐形地写下 ch"（U+E0000+ord(ch)）→ 必须**还成 ch**，删掉等于把证据也删了。
+    """
+    out = []
+    for c in text:
+        if c in _ZERO_WIDTH:
+            continue
+        cp = ord(c)
+        if _TAG_MIN <= cp <= _TAG_MAX:
+            out.append(chr(cp - _TAG_BASE))
+            continue
+        out.append(_HOMOGLYPH.get(c, c))
+    return "".join(out)
 
 
 def _rot13(s: str) -> str:
@@ -311,13 +345,32 @@ def _b64_decode(raw: str) -> Optional[str]:
         return None
 
 
+def _hits_non_encoding(text: str) -> bool:
+    """这段文本有没有命中**非编码族**的指纹。
+
+    编码还原的**共用工**（rot13 与 piglatin 都用），两道闸缺一不可（与端上同构）：
+    ① 还原结果必须命中指纹 —— 否则每段文本都能被"还原"出一个凭空变体；
+    ② 命中的**不能只有编码族** ——「裸长串」那条指纹对 rot13 结果天然成立
+       （rot13 不改变字符集），只看 ① 的话任意长字母数字串都会被判成 rot13（实测踩过）。
+    猪拉丁同理：它的还原产物也是普通英文，没这道闸，任何含 `xxx-yyay` 的文本都会被收。
+    """
+    return any(
+        fp.strategy != JailbreakStrategy.encoding and fingerprint_matches(fp, text)
+        for fp in FINGERPRINTS
+    )
+
+
 def normalize(text: str) -> NormalizationResult:
     cleaned = clean(text)
     variants: List[str] = []
     kinds: List[str] = []
 
-    if cleaned != text:
+    # 类别要报准：以前是"clean 改过文本就记 zero_width_or_homoglyph"，但 Tag 现在也会改文本 ——
+    # 不分开判会把 Tag 走私误报成零宽/同形字（报告里的 detected_encodings 会显示错）。
+    if any(c in _ZERO_WIDTH for c in text) or any(c in _HOMOGLYPH for c in text):
         kinds.append("zero_width_or_homoglyph")
+    if has_tag(text):
+        kinds.append("unicode_tag")
 
     for raw in _BASE64_RE.findall(cleaned):
         dec = _b64_decode(raw)
@@ -326,17 +379,17 @@ def normalize(text: str) -> NormalizationResult:
             if "base64" not in kinds:
                 kinds.append("base64")
 
-    # rot13 两道闸，缺一不可（与端上 EncodingNormalizer 同构）：
-    # ① 还原结果必须命中指纹；② 命中的不能只有编码族 —— 「裸长串」那条指纹对 rot13 结果
-    # 天然成立（rot13 不改变字符集），只看 ① 的话任意长字母数字串都会被判成 rot13（实测踩过）。
     r13 = _rot13(cleaned)
-    r13_hits_non_encoding = any(
-        fp.strategy != JailbreakStrategy.encoding and fingerprint_matches(fp, r13)
-        for fp in FINGERPRINTS
-    )
-    if r13 != cleaned and r13_hits_non_encoding:
+    if r13 != cleaned and _hits_non_encoding(r13):
         variants.append(r13)
         kinds.append("rot13")
+
+    # ── piglatin ── 与 rot13 同一把闸（见 _hits_non_encoding）
+    pl = _decode_piglatin(cleaned)
+    if pl is not None and pl != cleaned and _hits_non_encoding(pl):
+        variants.append(pl)
+        if "piglatin" not in kinds:
+            kinds.append("piglatin")
 
     for m in _MORSE_RE.findall(cleaned):
         dec = _decode_morse(m)
@@ -365,7 +418,11 @@ def for_matching(text: str) -> str:
 # 与端上 core/jailbreak/EncodingVariants.kt 逐字同构（同一套表、同一分隔符）。
 # ────────────────────────────────────────────────────────────────────
 
-ENCODING_KINDS: List[str] = ["base64", "rot13", "morse", "zero_width", "homoglyph"]
+ENCODING_KINDS: List[str] = [
+    "base64", "rot13", "morse", "zero_width", "homoglyph",
+    # A1（借 FuzzyAI 的 `pig` / `asc`）：两种**可逆**的新编码，2026-10-15 补。
+    "piglatin", "unicode_tag",
+]
 
 
 def encode_base64(plain: str) -> str:
@@ -406,6 +463,65 @@ def encode_homoglyph(plain: str) -> str:
     return "".join(reverse.get(c, c) for c in plain)
 
 
+def encode_piglatin(plain: str) -> str:
+    """**受限**猪拉丁（Pig Latin）：`R + "-" + C + "ay"`（C = 词首辅音簇，R = 其余）。
+
+    为什么是"受限"方言（可逆性换来的，不是偷懒）：
+    1. **完整猪拉丁不可逆** —— `strap` 编成 `apstray`，还原时无法确定被搬到末尾的辅音簇
+       是 `str` 还是 `pstr`（去掉 `ay` 得 `apstr`，尾辅音串有多种切法）；
+    2. **标准写法自相冲突** —— 元音开头的词加 `-way`，而"辅音簇恰好是 w"的词拼出来一模一样：
+       `asp-way` 既可能是 `asp` 原地加 `-way`，也可能是 `wasp` 把 w 搬到末尾。
+    所以本方言**只动"纯 ASCII 字母、且以辅音开头"的词**，元音开头与无字母的词原样保留
+    —— 这样还原只需找最后一个 `-`，唯一可逆。
+    规避效果不受影响：命中词只要以辅音开头就照样被改形。
+    """
+    out = []
+    for w in re.split(r"(\s+)", plain):
+        if not re.fullmatch(r"[A-Za-z]+", w):
+            out.append(w)                      # 中文/数字/标点：不碰
+            continue
+        if w[0] in "aeiouAEIOU":
+            out.append(w)                      # 元音开头：方言里不动（见 KDoc 第 2 条）
+            continue
+        m = re.match(r"^([^aeiouAEIOU]+)(.+)$", w)
+        if not m:
+            out.append(w)                      # 全辅音：无 R 可搬，原样
+            continue
+        out.append(m.group(2) + "-" + m.group(1) + "ay")
+    return "".join(out)
+
+
+def _decode_piglatin(encoded: str) -> Optional[str]:
+    """`encode_piglatin` 的严格逆运算：找每词最后一个 `-` 拆开。
+
+    与 `_decode_morse` 不同，这里**不做整体放弃**：一个词不像猪拉丁就原样留着
+    （猪拉丁是在正常句子里改词的，不是整段替换），但**至少得有一个词真的被拆开**才返回，
+    否则返回 None（"什么都没还原出来"与"还原出来等于原文"要分清）。
+    """
+    out = []
+    hit = False
+    for w in re.split(r"(\s+)", encoded):
+        m = re.fullmatch(r"(.+)-([^aeiouAEIOU]+)ay", w) if w else None
+        if m:
+            out.append(m.group(2) + m.group(1))
+            hit = True
+        else:
+            out.append(w)
+    return "".join(out) if hit else None
+
+
+def encode_unicode_tag(plain: str) -> str:
+    """把 ASCII 字符映射进 Unicode Tag 块（U+E0000 + ord(ch)）：肉眼完全不可见。
+
+    非 ASCII（中文等）原样保留 —— Tag 块只覆盖与 ASCII 一一对应的那一段。
+    ⚠️ Python 天然按码点迭代（`chr(cp)` 直接就是一个字符）；Kotlin 侧必须走 `codePoints()`，
+    否则会产出**半截代理对**（见 `_TAG_BASE` 上方注释与 docs §3.2）。
+    """
+    return "".join(
+        chr(_TAG_BASE + ord(c)) if 0x20 <= ord(c) <= 0x7E else c for c in plain
+    )
+
+
 def encode(kind: str, plain: str) -> str:
     """按 kind 编码；认不出的 kind 返回原文（宁可原样，也不猜一个）。"""
     fn = {
@@ -414,5 +530,7 @@ def encode(kind: str, plain: str) -> str:
         "morse": encode_morse,
         "zero_width": encode_zero_width,
         "homoglyph": encode_homoglyph,
+        "piglatin": encode_piglatin,
+        "unicode_tag": encode_unicode_tag,
     }.get(kind)
     return fn(plain) if fn else plain

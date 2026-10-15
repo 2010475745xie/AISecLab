@@ -39,6 +39,37 @@ object EncodingNormalizer {
     )
 
     /**
+     * Unicode Tag 块 `U+E0000–U+E007F` 的边界。攻击者把 payload 里每个 ASCII 字符换成
+     * `U+E0000 + ord(ch)`（`'a'` → `U+E0061`）—— 肉眼与常规正则都看不见
+     * （"不可见提示走私"），但 tokenizer 仍会读到原文。这是 FuzzyAI 的 `asc` 技术，
+     * 我们此前**完全缺失**（[ZERO_WIDTH] 只含 BMP 内的那几个）。
+     *
+     * ⚠️ **该块在 BMP 之外**。实测（jshell，Java 与 Kotlin 同为 UTF-16）：
+     * ```
+     * "A\uDB40\uDC20B"   按 Char 迭代 → U+0041, U+DB40, U+DC20, U+0042
+     *                    按码点迭代 → U+00041, U+E0020, U+00042
+     * ```
+     * 即 `for (c in text)` 拿到的是**代理对的两个 Char**，其 `code` 落在 0xD800–0xDFFF，
+     * **永远不在** U+E0000–U+E007F —— 按 `Char` 判会**静默失效**（字面看着对、行为全错）。
+     * 而 Python 的 `for c in text` 天然按**码点**：同一份判据两端**不同构且不报错**。
+     * 所以 [clean] 必须按码点迭代。
+     */
+    internal const val TAG_BASE = 0xE0000
+    internal const val TAG_MIN = 0xE0000
+    internal const val TAG_MAX = 0xE007F
+
+    /** 有没有 Unicode Tag 字符（"不可见提示走私"的载体）。同样按码点扫。 */
+    fun hasTag(text: String): Boolean {
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            if (cp in TAG_MIN..TAG_MAX) return true
+            i += Character.charCount(cp)
+        }
+        return false
+    }
+
+    /**
      * 同形字 → ASCII。西里尔 / 希腊字母里长得跟拉丁字母一样的那些，
      * 常被用来写下 `іgnore prevіous` 这种**看起来完全正常**的绕过文本。
      *
@@ -85,7 +116,12 @@ object EncodingNormalizer {
         val cleaned: String,
         /** 各编码还原出来的明文（可能多条）。 */
         val decodedVariants: List<String>,
-        /** 命中的编码种类：`zero_width_or_homoglyph` / `base64` / `rot13` / `morse`。 */
+        /**
+         * 命中的编码种类：`zero_width_or_homoglyph` / `unicode_tag` / `base64` /
+         * `rot13` / `piglatin` / `morse`。取值与 [EncodingVariants.KINDS] 的 id 对应
+         * （`zero_width` / `homoglyph` 两种在**上报时合并**成 `zero_width_or_homoglyph` ——
+         * [clean] 对二者做的是同一件事，"是零宽还是同形字"在归因上没有区别）。
+         */
         val detectedEncodings: List<String>
     ) {
         /** 是否有任何编码痕迹。 */
@@ -108,7 +144,12 @@ object EncodingNormalizer {
         val variants = mutableListOf<String>()
         val kinds = mutableListOf<String>()
 
-        if (cleaned != text) kinds.add("zero_width_or_homoglyph")
+        // 类别要报准：以前是"clean 改过文本就记 zero_width_or_homoglyph"，但 Tag 现在也会改文本 ——
+        // 不分开判会把 Tag 走私误报成零宽/同形字（报告里的 detectedEncodings 会显示错）。
+        if (text.any { it in ZERO_WIDTH } || text.any { it in HOMOGLYPH }) {
+            kinds.add("zero_width_or_homoglyph")
+        }
+        if (hasTag(text)) kinds.add("unicode_tag")
 
         // ── base64 ──
         BASE64_RE.findAll(cleaned).forEach { m ->
@@ -122,20 +163,19 @@ object EncodingNormalizer {
             }
         }
 
-        // ── rot13 ──
-        // 两道闸，缺一不可：
-        // ① 还原结果必须命中指纹 —— 否则等于给每段文本凭空造一个变体；
-        // ② 命中的**不能只有编码族** —— 「裸长串」那条指纹（`[A-Za-z0-9+/]{40,}`）对 rot13
-        //    结果天然成立（rot13 不改变字符集），只看 ① 的话任意长字母数字串都会被判成
-        //    "rot13 编码"（实测：一段二进制 base64 就触发了，base64 闸拒掉了它、rot13 闸收了它）。
-        //    rot13 的意义是把隐藏的有害意图**还原成明文**；还原出来还是编码样的东西 = 什么都没暴露。
+        // ── rot13 ── 两道闸见 [hitsNonEncoding]
         val r13 = rot13(cleaned)
-        val r13HitsNonEncoding = StrategyFingerprintLibrary.ALL.any { fp ->
-            fp.strategy != JailbreakStrategy.ENCODING && fp.matches(r13)
-        }
-        if (r13 != cleaned && r13HitsNonEncoding) {
+        if (r13 != cleaned && hitsNonEncoding(r13)) {
             variants.add(r13)
             kinds.add("rot13")
+        }
+
+        // ── piglatin ── 与 rot13 同一把闸（理由见 [hitsNonEncoding]）：
+        // 猪拉丁的还原产物也是**普通英文**，没这道闸，任何含 `xxx-yyay` 的文本都会被收。
+        val pl = decodePiglatin(cleaned)
+        if (pl != null && pl != cleaned && hitsNonEncoding(pl)) {
+            variants.add(pl)
+            if ("piglatin" !in kinds) kinds.add("piglatin")
         }
 
         // ── morse ──
@@ -151,12 +191,32 @@ object EncodingNormalizer {
         return NormalizationResult(cleaned, variants, kinds)
     }
 
-    /** 剥离零宽字符 + 同形字归一。 */
+    /**
+     * 剥离零宽字符 + 同形字归一 + **Unicode Tag 还原成可见字符**。
+     *
+     * ⚠️ **按码点迭代**，不能写 `for (c in text)` —— 见 [TAG_BASE] 的实测注释：
+     * U+E0000 块是代理对，按 `Char` 迭代拿到的两个代理 Char 永远匹配不到该区间，会**静默失效**。
+     *
+     * Tag 与零宽的**处理方向不同**，别混：零宽只起分隔作用、本身不含信息 → 删掉；
+     * Tag 是"隐形地写下 ch"（`U+E0000 + ord(ch)`）→ 必须**还成 ch**，删掉等于把证据也删了。
+     */
     fun clean(text: String): String {
         val sb = StringBuilder(text.length)
-        for (c in text) {
-            if (c in ZERO_WIDTH) continue
-            sb.append(HOMOGLYPH[c] ?: c)
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            i += Character.charCount(cp)
+            if (cp <= 0xFFFF) {
+                val c = cp.toChar()
+                if (c in ZERO_WIDTH) continue
+                sb.append(HOMOGLYPH[c] ?: c)
+                continue
+            }
+            if (cp in TAG_MIN..TAG_MAX) {
+                sb.appendCodePoint(cp - TAG_BASE)
+                continue
+            }
+            sb.appendCodePoint(cp)
         }
         return sb.toString()
     }
@@ -176,6 +236,68 @@ object EncodingNormalizer {
             else -> c
         }
     }.joinToString("")
+
+    /**
+     * 这段文本有没有命中**非编码族**的指纹。编码还原的**共用工**（[rot13] 与 [decodePiglatin] 都用）。
+     *
+     * 两道闸，缺一不可：
+     * ① 还原结果必须命中指纹 —— 否则等于给每段文本凭空造一个变体（rot13 对任意文本都有输出）；
+     * ② 命中的**不能只有编码族** —— 「裸长串」那条指纹（`[A-Za-z0-9+/]{40,}`）对 rot13
+     *    结果天然成立（rot13 不改变字符集），只看 ① 的话任意长字母数字串都会被判成
+     *    "rot13 编码"（实测：一段二进制 base64 就触发了，base64 闸拒掉了它、rot13 闸收了它）。
+     *    还原的意义是把隐藏的有害意图**还原成明文**；还原出来还是编码样的东西 = 什么都没暴露。
+     */
+    private fun hitsNonEncoding(text: String): Boolean =
+        StrategyFingerprintLibrary.ALL.any { fp ->
+            fp.strategy != JailbreakStrategy.ENCODING && fp.matches(text)
+        }
+
+    /** 猪拉丁还原用：`(.+)-([^aeiouAEIOU]+)ay`，**整词匹配**（与后端 `re.fullmatch` 同构）。
+     *
+     * 贪婪 `.+` 会回退到"最后一个能凑出 `-辅音簇ay` 的连字符"：Java 与 Python 两条引擎
+     * 都是回溯式，在这条模式上的结论一致，所以两端不会分叉。但**两端各写一遍正则必须逐字
+     * 相同** —— 差异只会表现为"两端还原出的变体不一样"，而没有任何地方会报错。 */
+    private val PIG_DECODE_RE = Regex("""(.+)-([^aeiouAEIOU]+)ay""")
+
+    /**
+     * [EncodingVariants.piglatin] 的严格逆运算：找每词最后一个 `-` 拆开。
+     *
+     * 与 [decodeMorse] 不同，这里**不做整体放弃**：一个词不像猪拉丁就原样留着
+     * （猪拉丁是在正常句子里改词的，不是整段替换），但**至少得有一个词真的被拆开**才返回，
+     * 否则返回 null —— "什么都没还原出来"与"还原出来等于原文"要分清（后者会让
+     * `pl != cleaned` 之外的调用方误判成一次成功还原）。
+     *
+     * 为什么限制方言：完整猪拉丁不可逆 —— `strap` 编成 `apstray` 后无法确定被搬走的是
+     * `str` 还是 `pstr`；且"元音开头加 `-way`"与"辅音簇是 `w`"撞车（`asp-way` 二义）。
+     * 所以生成侧只动"纯 ASCII 字母且以辅音开头"的词（见 [EncodingVariants.piglatin]），
+     * 还原侧才敢这么直接拆。**两侧的收窄规则必须成对**，改一边就是不可逆。
+     *
+     * 分隔符按 Unicode 空白算（`Char.isWhitespace()`），与后端 `re.split(r"(\s+)")` 在
+     * 本用例可达的输入（普通空格）上等价；原文的空白**原样保留**（拼接回去不重排）。
+     */
+    internal fun decodePiglatin(encoded: String): String? {
+        val sb = StringBuilder(encoded.length)
+        var hit = false
+        var i = 0
+        while (i < encoded.length) {
+            val c = encoded[i]
+            if (c.isWhitespace()) {
+                sb.append(c); i++; continue
+            }
+            var j = i
+            while (j < encoded.length && !encoded[j].isWhitespace()) j++
+            val word = encoded.substring(i, j)
+            val m = PIG_DECODE_RE.matchEntire(word)
+            if (m != null) {
+                sb.append(m.groupValues[2]).append(m.groupValues[1])
+                hit = true
+            } else {
+                sb.append(word)
+            }
+            i = j
+        }
+        return if (hit) sb.toString() else null
+    }
 
     /**
      * 摩斯解码。**任一段认不出就整体放弃**（return null）——

@@ -19,8 +19,18 @@ import java.util.Base64
  */
 object EncodingVariants {
 
-    /** 支持造样本的编码种类 id，与 [EncodingNormalizer] 的 `detectedEncodings` 取值对应。 */
-    val KINDS: List<String> = listOf("base64", "rot13", "morse", "zero_width", "homoglyph")
+    /**
+     * 支持造样本的编码种类 id，与 [EncodingNormalizer] 的 `detectedEncodings` 取值对应。
+     *
+     * **顺序即轮转顺序**：变体集按 `GOALS[i % KINDS.size]` 取种类，所以这里的顺序
+     * 决定了哪条目标用哪种编码 —— 改顺序＝改 100 条变体里的 20 条 prompt，
+     * 必须与后端 `ENCODING_KINDS` **逐项同序**（`check-jailbreak-parity.py` 会比 prompt 全文）。
+     */
+    val KINDS: List<String> = listOf(
+        "base64", "rot13", "morse", "zero_width", "homoglyph",
+        // A1（借 FuzzyAI 的 `pig` / `asc`）：两种**可逆**的新编码，2026-10-15 补。
+        "piglatin", "unicode_tag"
+    )
 
     /** 标准 Base64（带 padding）。还原侧用 MIME 解码器，两种解码器对本输出等价。 */
     fun base64(plain: String): String =
@@ -73,6 +83,68 @@ object EncodingVariants {
         return plain.map { reverse[it] ?: it }.joinToString("")
     }
 
+    private val PIG_WORD_RE = Regex("""[A-Za-z]+""")
+    private val PIG_HEAD_RE = Regex("""^([^aeiouAEIOU]+)(.+)$""")
+
+    /**
+     * **受限**猪拉丁（Pig Latin）：`R + "-" + C + "ay"`（C = 词首辅音簇，R = 其余）。
+     *
+     * 为什么是"受限"方言（**可逆性换来的，不是偷懒**）：
+     * 1. **完整猪拉丁不可逆** —— `strap` 编成 `apstray`，还原时无法确定被搬到末尾的辅音簇
+     *    是 `str` 还是 `pstr`（去掉 `ay` 得 `apstr`，尾辅音串有多种切法）；
+     * 2. **标准写法自相冲突** —— 元音开头的词加 `-way`，而"辅音簇恰好是 w"的词拼出来一模一样：
+     *    `asp-way` 既可能是 `asp` 原地加 `-way`，也可能是 `wasp` 把 w 搬到末尾。
+     *
+     * 所以本方言**只动"纯 ASCII 字母、且以辅音开头"的词**，元音开头与无字母的词原样保留
+     * —— 这样还原只需找最后一个 `-`，唯一可逆（见 [EncodingNormalizer.decodePiglatin]）。
+     * 规避效果不受影响：命中词只要以辅音开头就照样被改形。
+     *
+     * 逐词扫描而不是 `Regex.split`：**空白必须原样保留**（编解码要能逐字还原），
+     * 而 `Regex.split` 是否把捕获组放回结果属于 stdlib 实现细节，赌它不如自己写明白。
+     */
+    fun piglatin(plain: String): String {
+        val sb = StringBuilder(plain.length)
+        var i = 0
+        while (i < plain.length) {
+            val c = plain[i]
+            if (c.isWhitespace()) { sb.append(c); i++; continue }
+            var j = i
+            while (j < plain.length && !plain[j].isWhitespace()) j++
+            sb.append(pigWord(plain.substring(i, j)))
+            i = j
+        }
+        return sb.toString()
+    }
+
+    private fun pigWord(w: String): String {
+        if (!PIG_WORD_RE.matches(w)) return w              // 中文/数字/标点：不碰
+        if (w[0] in "aeiouAEIOU") return w                 // 元音开头：方言里不动（见 KDoc 第 2 条）
+        val m = PIG_HEAD_RE.matchEntire(w) ?: return w     // 全辅音：没有 R 可搬，原样
+        return m.groupValues[2] + "-" + m.groupValues[1] + "ay"
+    }
+
+    /**
+     * 把可打印 ASCII 映射进 Unicode Tag 块（`U+E0000 + ord(ch)`）：肉眼完全不可见，
+     * 但 tokenizer 照读 —— 即 FuzzyAI 的 `asc`，「不可见提示走私」。
+     *
+     * 非 ASCII（中文等）原样保留：Tag 块只覆盖与 ASCII 一一对应的那一段。
+     *
+     * ⚠️ 必须按**码点**迭代（`codePointAt` + `Character.charCount`）：Python 的
+     * `for c in text` 天然是码点，Kotlin 的 `for (c in text)` 是 UTF-16 码元 ——
+     * 同一段文本两端会得到**不同的串**，而且不报错。见 [EncodingNormalizer.TAG_BASE]。
+     */
+    fun unicodeTag(plain: String): String {
+        val sb = StringBuilder(plain.length)
+        var i = 0
+        while (i < plain.length) {
+            val cp = plain.codePointAt(i)
+            i += Character.charCount(cp)
+            if (cp in 0x20..0x7E) sb.appendCodePoint(EncodingNormalizer.TAG_BASE + cp)
+            else sb.appendCodePoint(cp)
+        }
+        return sb.toString()
+    }
+
     /** 按 [KINDS] 里的 id 编码；认不出的 id 返回原文（宁可原样，也不猜一个）。 */
     fun encode(kind: String, plain: String): String = when (kind) {
         "base64" -> base64(plain)
@@ -80,6 +152,8 @@ object EncodingVariants {
         "morse" -> morse(plain)
         "zero_width" -> zeroWidth(plain)
         "homoglyph" -> homoglyph(plain)
+        "piglatin" -> piglatin(plain)
+        "unicode_tag" -> unicodeTag(plain)
         else -> plain
     }
 }
