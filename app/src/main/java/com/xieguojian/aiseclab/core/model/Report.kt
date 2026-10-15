@@ -33,7 +33,20 @@ data class Report(
      * 外部裁判是端上的对照件（在本地判定链之外旁挂一路），后端那条链不参与，
      * 所以这里的 null 也可能是「后端产的报告」，同样按「未接入」展示。
      */
-    val externalCheck: ExternalCheck? = null
+    val externalCheck: ExternalCheck? = null,
+    /**
+     * 断点续测自证：本轮有多少条用例的结果是**从检查点复用**的（未重跑）。0 = 全新一轮。
+     *
+     * 为什么必须写进报告：不写的话，「这份报告里 50 条中有 30 条其实是上一轮的结论」这件事
+     * 在产物里查无实据 —— 而两次运行的被测模型/裁判配置理论上可能不同（BYOK，key 由端上带）。
+     * 与 [tokenSpendLine] / `cotNote` / `reproLine` 同一纪律：会误导读者的口径，产物里必须自己说清。
+     *
+     * 字段名与后端 `backend/app/models.py::Report.resumedCount` 逐字一致；本端忽略未知键，
+     * 名字对不上就是**静默丢弃**（这一行永远不显示，且不报错）。
+     *
+     * 本机跑（不委托后端）永远是 0 —— 端上不做落盘，没有断点可续。展示文案见 [resumeNote]。
+     */
+    val resumedCount: Int = 0
 )
 
 /**
@@ -79,6 +92,20 @@ data class TokenUsage(
 fun Report.tokenSpendLine(): String =
     tokenUsage?.summary()
         ?: "未记录 —— 这份报告生成时没有留下用量（旧版本生成的报告，或本轮没有发起过模型调用）。"
+
+/**
+ * 「断点续测」这一行的文案。**报告页 / Markdown 导出 / HTML 导出三处共用**（做法同 [tokenSpendLine]）。
+ *
+ * 没有任何复用时时返回**空串、而不是「复用 0 条」**：没续跑就不该多出一句话 ——
+ * 这与「没采集 ≠ 很差」同源：0 条复用是"本轮从头跑"，不是一条需要读者注意的异常。
+ *
+ * ⚠️ 措辞上把「本轮未再消耗」写出来，而不是笼统说「不计费」：那些用例**在上一次运行时是真的
+ * 烧过 token 的**，本轮的账单里不含它们，仅此而已。写成"不计费"会让读者以为白拿了一份结果。
+ */
+fun Report.resumeNote(): String =
+    if (resumedCount <= 0) ""
+    else "断点续测：本轮 ${results.size} 条用例中有 $resumedCount 条沿用上次中断前的判定结果" +
+        "（未重跑，本轮消耗不含这批）。"
 
 @Serializable
 data class DimensionScore(

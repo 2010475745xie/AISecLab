@@ -242,6 +242,13 @@ class Report(BaseModel):
     dimensions: dict                  # {Dimension: DimensionScore}，pydantic 用 dict 保持 JSON 兼容
     results: List[TestResult]
     summary: str
+    # ── 断点续测自证（2026-10-15）──
+    # 本轮有多少条用例的结果是**从检查点复用**的（未重跑）。0 = 全新一轮。
+    # 为什么必须写进报告：不写的话，"这份报告里 50 条中有 30 条其实是上一轮的结论"这件事
+    # 在报告里**查无实据** —— 而两次运行的被测模型/裁判配置理论上可能不同（BYOK，key 由端上带）。
+    # 与 tokenSpendLine / cotNote / reproLine 同一纪律：会误导读者的口径，必须在产物里自己说清。
+    # 字段名与端上 `core/model/Report.kt::resumedCount` 逐字一致（两端都忽略未知键，对不上=静默丢弃）。
+    resumedCount: int = 0
 
 
 class SessionRequest(BaseModel):
@@ -261,3 +268,10 @@ class SessionRequest(BaseModel):
     # 字段名必须与端上 `BackendClient.SessionRequest.useJailbreakVariants` 逐字一致
     # —— 两端都忽略未知键，名字对不上是**静默丢弃**（变体集就是永远不跑，不报错）。
     useJailbreakVariants: bool = False
+    # ── 断点续测（2026-10-15）──
+    # 传上次中断的 sessionId，就从那个检查点接着跑：**已拿到结果的用例直接复用、不重跑**，
+    # 只补跑剩下的，最后合并成一份完整报告。
+    # ⚠️ 必须同时带上完整 request（target / judge / aux…）：检查点里**不存 API key**
+    #（见 checkpoint.py 的 docstring），续跑要用的凭证只能由端上重新带一次 —— 这是刻意的取舍。
+    # 字段名与端上 BackendClient.SessionRequest 必须逐字一致；两端都忽略未知键，名字对不上是静默丢弃。
+    resumeFrom: Optional[str] = None

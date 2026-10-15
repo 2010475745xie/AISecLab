@@ -57,8 +57,36 @@ class BackendClient {
         // 并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略）。
         // 字段名必须与后端 `SessionRequest.useJailbreakVariants` 逐字一致 ——
         // 后端忽略未知键，名字对不上是**静默丢弃**（变体集永远不跑，且不报错）。
-        val useJailbreakVariants: Boolean = false
+        val useJailbreakVariants: Boolean = false,
+        // ── 断点续测 ──
+        // 传上次中断的 sessionId 就从那个检查点接着跑：后端把**已拿到结果的用例直接复用、
+        // 不重跑**，只补跑剩下的，合成一份完整报告。
+        // ⚠️ 必须同时带完整 request（target / judge / aux…）：检查点里不存 API key，
+        // 续跑要用的凭证只能由端上重新带一次（见 backend/app/checkpoint.py 的 docstring）。
+        // 字段名与后端 `SessionRequest.resumeFrom` 逐字一致，对不上是静默丢弃（永远从头跑）。
+        val resumeFrom: String? = null
     )
+
+    /**
+     * 「可续跑的会话」摘要（`GET /v1/sessions/incomplete`）。
+     *
+     * 只是摘要、**不含结果本体** —— 50 条结果有几百 KB，列表接口不该驮着它。
+     * 点「继续」时把 [sessionId] 填进下次请求的 `resumeFrom` 就够了。
+     */
+    @Serializable
+    data class IncompleteSession(
+        val sessionId: String,
+        val state: String = "",
+        val completed: Int = 0,
+        val total: Int = 0,
+        val createdAt: Long = 0,
+        val updatedAt: Long = 0,
+        /** 上次是怎么断的（后端留下的一句话）；null = 没记录。 */
+        val error: String? = null
+    )
+
+    @Serializable
+    private data class IncompleteList(val sessions: List<IncompleteSession> = emptyList())
 
     @Serializable
     private data class SessionCreated(val sessionId: String)
@@ -109,14 +137,58 @@ class BackendClient {
         variants: Boolean,
         token: String?,
         onProgress: suspend (completed: Int, total: Int) -> Unit,
-        onLog: ((String) -> Unit)? = null
+        onLog: ((String) -> Unit)? = null,
+        resumeFrom: String? = null
     ): Report = withContext(Dispatchers.IO) {
-        val sid = createSession(baseUrl, target, aux, judge, dimensions, recursive, variants, token)
-        onLog?.invoke("▶ 已委托后端测试：目标 ${target.model} @ $baseUrl")
+        val sid = createSession(baseUrl, target, aux, judge, dimensions, recursive, variants,
+            token, resumeFrom)
+        if (resumeFrom.isNullOrBlank()) {
+            onLog?.invoke("▶ 已委托后端测试：目标 ${target.model} @ $baseUrl")
+        } else {
+            // 续跑的日志必须**说清复用了上次的会话**，否则用户会以为又是从 0 开始跑
+            //（进度会很快跳到 N/50，看起来像跳号）。
+            onLog?.invoke("↻ 继续上次未跑完的测试（sessionId = $resumeFrom）")
+            onLog?.invoke("  已完成的用例直接复用、不重跑；只补跑剩下的。目标 ${target.model} @ $baseUrl")
+        }
         onLog?.invoke("  sessionId = $sid")
         subscribeStream(baseUrl, sid, token, onProgress, onLog)
         getReport(baseUrl, sid, token)
     }
+
+    /**
+     * 拉「可续跑的会话」列表（断点续测入口）。
+     *
+     * 失败时返回空表而不是抛异常：这只是首页的一张提示卡，**后端连不上不该让配置页炸掉**
+     * —— 用户此刻可能正要去改后端地址。真正的错误会在点「开始测试」时以明确的方式报出来。
+     */
+    suspend fun listIncomplete(baseUrl: String, token: String?): List<IncompleteSession> =
+        withContext(Dispatchers.IO) {
+            if (baseUrl.isBlank()) return@withContext emptyList()
+            val req = Request.Builder()
+                .url(join(baseUrl, "/v1/sessions/incomplete"))
+                .get()
+                .apply { auth(this, token) }
+                .build()
+            runCatching {
+                http.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use emptyList<IncompleteSession>()
+                    val text = resp.body?.string() ?: ""
+                    json.decodeFromString(IncompleteList.serializer(), text).sessions
+                }
+            }.getOrDefault(emptyList())
+        }
+
+    /** 丢掉某个会话的断点（用户放弃续跑）。失败静默返回 false，由调用方决定怎么提示。 */
+    suspend fun dropCheckpoint(baseUrl: String, sid: String, token: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            if (baseUrl.isBlank() || sid.isBlank()) return@withContext false
+            val req = Request.Builder()
+                .url(join(baseUrl, "/v1/sessions/$sid/checkpoint"))
+                .delete()
+                .apply { auth(this, token) }
+                .build()
+            runCatching { http.newCall(req).execute().use { it.isSuccessful } }.getOrDefault(false)
+        }
 
     /**
      * 连通性探测：GET {baseUrl}/health。
@@ -146,7 +218,8 @@ class BackendClient {
         dimensions: Set<Dimension>,
         recursive: Boolean,
         variants: Boolean,
-        token: String?
+        token: String?,
+        resumeFrom: String? = null
     ): String {
         val body = json.encodeToString(
             SessionRequest.serializer(),
@@ -156,7 +229,8 @@ class BackendClient {
                 judge = judge,
                 dimensions = dimensions.toList(),
                 recursive = recursive,
-                useJailbreakVariants = variants
+                useJailbreakVariants = variants,
+                resumeFrom = resumeFrom?.takeIf { it.isNotBlank() }
             )
         ).toRequestBody("application/json".toMediaType())
 

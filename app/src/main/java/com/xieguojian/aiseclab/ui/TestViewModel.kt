@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Environment
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.core.judge.guard.GuardModelDownloader
 import com.xieguojian.aiseclab.core.judge.guard.OnDeviceGuardModel
 import com.xieguojian.aiseclab.core.model.AuxModelProfile
@@ -247,12 +248,17 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         refreshReadyTiers()
         // 冷启动主动读一次磁盘历史，别让列表空着等第一次 Done
         refreshHistory()
+        // 断点续测：冷启动也拉一次"后端上还没跑完的会话"，否则上次被中断的那轮
+        // 要等用户自己去别处晃一圈才出现（入口在测试配置页）。
+        refreshResumable()
         // 测试协程现在跑在前台服务进程里，进度经 TestRunStateHolder 中转，这里镜像到 UI 订阅的 _testState
         viewModelScope.launch {
             TestRunStateHolder.state.collect {
                 _testState.value = it
                 // 服务侧把新报告写进历史了，收到 Done 时顺手刷新列表
                 if (it is TestState.Done) refreshHistory()
+                // 断点续测：一轮结束（无论成败）都会改变"哪些会话还没跑完"，重拉一次
+                if (it is TestState.Done || it is TestState.Error) refreshResumable()
             }
         }
         viewModelScope.launch {
@@ -306,6 +312,41 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         _useVariants.value = enabled
     }
 
+    // ------------------------------------------------------------------
+    // 断点续测：后端上还没跑完的会话
+    // ------------------------------------------------------------------
+
+    private val _resumable = MutableStateFlow<List<BackendClient.IncompleteSession>>(emptyList())
+    val resumable: StateFlow<List<BackendClient.IncompleteSession>> = _resumable.asStateFlow()
+
+    /**
+     * 拉后端上「还没跑完」的会话（断点续测入口）。
+     *
+     * 后端没配 / 连不上 → 空表，**不报错**：这只是配置页的一张提示卡，
+     * 用户此刻可能正要去改后端地址，没必要弹一个错误盖住他的操作。
+     */
+    fun refreshResumable() {
+        val url = _backendUrl.value
+        if (url.isBlank()) {
+            _resumable.value = emptyList()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _resumable.value = BackendClient().listIncomplete(url, _backendToken.value)
+        }
+    }
+
+    /** 丢掉某个会话的断点（用户放弃续跑），随后重拉列表。 */
+    fun dropResumable(sid: String) {
+        val url = _backendUrl.value
+        if (url.isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val client = BackendClient()
+            client.dropCheckpoint(url, sid, _backendToken.value)
+            _resumable.value = client.listIncomplete(url, _backendToken.value)
+        }
+    }
+
     /**
      * 启动一轮测试。
      *
@@ -315,8 +356,11 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 配置传递：target/aux/guard/roleSource 都在 EncryptedSharedPreferences 里（持久化），
      * 服务自己读；唯独 dimensions 和 recursive 只在 VM 内存，从 Intent 带过去。
+     *
+     * [resumeFrom] 非空 = **断点续测**：接着那个后端会话的检查点跑（已完成的用例直接复用、
+     * 不重跑）。只在后端模式有意义——本机跑不落盘，没有断点。
      */
-    fun startTest() {
+    fun startTest(resumeFrom: String? = null) {
         if (_target.value == null) return
         if (TestRunStateHolder.isRunning) return
         val intent = Intent(getApplication(), TestRunService::class.java).apply {
@@ -326,6 +370,7 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
             )
             putExtra(TestRunService.EXTRA_RECURSIVE, _useRecursive.value)
             putExtra(TestRunService.EXTRA_VARIANTS, _useVariants.value)
+            putExtra(TestRunService.EXTRA_RESUME_FROM, resumeFrom)
         }
         getApplication<Application>().startForegroundService(intent)
     }

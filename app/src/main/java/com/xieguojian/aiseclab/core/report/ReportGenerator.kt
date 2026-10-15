@@ -5,6 +5,7 @@ import com.xieguojian.aiseclab.core.model.ModelProfile
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.tokenSpendLine
+import com.xieguojian.aiseclab.core.model.resumeNote
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,6 +64,9 @@ object ReportGenerator {
         append("\n## 摘要\n\n${report.summary}\n\n")
         // 本轮账单。文案与报告页/HTML 导出同源（Report.tokenSpendLine），别各自拼。
         append("\n## 本次消耗\n\n${report.tokenSpendLine()}\n\n")
+        // 断点续测自证：这份报告里哪些条不是本轮跑的（没有复用时 resumeNote() 是空串，不写这一行）。
+        // 文案唯一源 = Report.resumeNote()（报告页 / Markdown / HTML 三处同源）。
+        report.resumeNote().takeIf { it.isNotEmpty() }?.let { append("${it}\n\n") }
         // 复现性档：报告自证"别人照着重跑能不能得到同一份结论"。
         // 文案唯一源 = core/report/ReproNote.kt（报告页 / Markdown / HTML 三处同源）。
         append("## 复现性\n\n${report.reproLine()}\n\n")
@@ -356,6 +360,10 @@ object ReportGenerator {
 
         // 本轮账单：文案与报告页 / Markdown 导出同源（Report.tokenSpendLine）
         append("<h2>本次消耗</h2><p>${escapeHtml(report.tokenSpendLine())}</p>")
+        // 断点续测自证：文案唯一源 = Report.resumeNote()（与报告页 / Markdown 同源）。
+        // 没有复用时是空串 → 不写这一段（别写"复用 0 条"）。
+        report.resumeNote().takeIf { it.isNotEmpty() }
+            ?.let { append("<p>${escapeHtml(it)}</p>") }
         // 复现性档（文案唯一源 = core/report/ReproNote.kt，与报告页 / Markdown 同源）。
         append("<h2>复现性</h2><p>${escapeHtml(report.reproLine())}</p>")
         // 外部对照（B4）：文案唯一源 = core/report/ExternalNote.kt，与报告页 / Markdown 同源。

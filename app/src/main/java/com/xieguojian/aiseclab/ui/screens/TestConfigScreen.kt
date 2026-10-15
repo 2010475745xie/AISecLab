@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -23,6 +25,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -31,11 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.xieguojian.aiseclab.core.RunMode
-import com.xieguojian.aiseclab.core.engine.modules.ConsistencyModule
-import com.xieguojian.aiseclab.core.engine.modules.FactualityModule
-import com.xieguojian.aiseclab.core.engine.modules.JailbreakVariantsModule
-import com.xieguojian.aiseclab.core.engine.modules.RobustnessModule
-import com.xieguojian.aiseclab.core.engine.modules.SecurityModule
+import com.xieguojian.aiseclab.core.api.BackendClient
+import com.xieguojian.aiseclab.core.engine.plannedCasesByDimension
+import com.xieguojian.aiseclab.core.engine.variantCaseCount
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.RoleSource
 import com.xieguojian.aiseclab.core.resolveRunMode
@@ -51,20 +52,21 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         val backendUrl by vm.backendUrl.collectAsState()
         val localRun by vm.localRunEnabled.collectAsState()
     val state by vm.testState.collectAsState()
+    val resumable by vm.resumable.collectAsState()
     val ctx = LocalContext.current
+
+    // 进配置页就重拉一次"后端上还没跑完的会话"，别等 App 重启才更新。
+    LaunchedEffect(Unit) { vm.refreshResumable() }
 
     // 每个维度实际有多少条用例：让用户在点「开始测试」前就知道这一轮的规模。
     // 条数直接决定耗时和 API 花费，而之前勾完维度是一点概念都没有的。
-    val variantCount = remember { JailbreakVariantsModule().buildCases().size }
-    val casesPerDim = remember(useVariants) {
-        val base = listOf(SecurityModule(), ConsistencyModule(), FactualityModule(), RobustnessModule())
-            .associate { it.dimension to it.buildCases().size }
-        // 变体集只挂在安全维度上：打开后该维度条数必须跟着涨，
-        // 否则界面上写的「本轮 X 条」是假的 —— 用户按这个数字估时间与花费。
-        if (useVariants) base + (Dimension.SECURITY to (base.getValue(Dimension.SECURITY) + variantCount))
-        else base
-    }
+    //
+    // ⚠️ 口径**唯一源 = core/engine/CasePlan.kt**。这里以前自己算了一遍（模块表求和），
+    // 于是"配置页说 250、跑出来 50"时，两个数字各有各的出处、谁也说不清谁错
+    // （2026-10-15 用户报的"勾了变体集数字在 50 和 250 之间横跳"就是这个温床）。
+    val casesPerDim = remember(useVariants) { plannedCasesByDimension(useVariants) }
     val totalCases = selected.sumOf { casesPerDim[it] ?: 0 }
+    val variantCount = remember { variantCaseCount() }
 
     Column(
         modifier = Modifier
@@ -73,6 +75,19 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
             .padding(20.dp)
     ) {
         Text("测试配置", style = MaterialTheme.typography.headlineMedium)
+
+        // ── 断点续测入口 ──
+        // 只在**后端模式**且后端确有没跑完的会话时出现（本机跑不落盘，没有断点可续）。
+        // 放在最上面：用户是来"接着上次跑"的，不该让他先滑完整个配置页才找到入口。
+        if (resolveRunMode(backendUrl, localRun) == RunMode.BACKEND && resumable.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            ResumableCard(
+                items = resumable,
+                enabled = state !is TestViewModel.TestState.Running,
+                onResume = { sid -> vm.startTest(resumeFrom = sid); onStart() },
+                onDrop = { sid -> vm.dropResumable(sid) }
+            )
+        }
 
         Spacer(Modifier.height(16.dp))
         Text("选择评估维度", style = MaterialTheme.typography.titleMedium)
@@ -269,4 +284,68 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
             }
         }
     }
+}
+
+/**
+ * 「继续上次没跑完的测试」卡片（断点续测）。
+ *
+ * 为什么值得占配置页最上面一块：一轮 250 条的测试烧的是真 token，被中断后从头跑等于白烧一遍
+ * （2026-10-15 实际发生过：服务被回收，端上跑了十几条的会话直接没了）。
+ * 这里列的是**后端上还没跑完的会话**（`GET /v1/sessions/incomplete`），点「继续」就把
+ * sessionId 带进请求（`resumeFrom`），后端把已完成的用例直接复用、只补跑剩下的。
+ *
+ * ⚠️ 三句必须说清的话（都是用户点之前就该知道的）：
+ * 1. 复用的语义 —— 复用不等于"免费拿到结果"，那些用例**上一次跑是真烧过 token 的**；
+ * 2. 按当前配置续跑 —— 维度/开关用当前设置；被改过的那部分用例会**重跑**（指纹对不上）；
+ * 3. 换过被测模型会被后端拒绝 —— 否则两个模型的结果会混进同一份报告，那是假证据。
+ */
+@Composable
+private fun ResumableCard(
+    items: List<BackendClient.IncompleteSession>,
+    enabled: Boolean,
+    onResume: (String) -> Unit,
+    onDrop: (String) -> Unit
+) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text("断点续测", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "下面这些测试没跑完。点「继续」会接着跑：已拿到结果的用例直接复用、不重跑，" +
+                    "只补跑剩下的，最后合成一份完整报告。" +
+                    "按**当前**的模型与维度续跑；这几项若与上次不同，对不上的用例会重跑；" +
+                    "被测模型换过则会被后端拒绝（避免两个模型的结果混进同一份报告）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            items.forEach { s ->
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    buildString {
+                        append("${s.completed} / ${s.total} 条")
+                        append(" · ${resumeStateZh(s.state)}")
+                        if (!s.error.isNullOrBlank()) append(" · ${s.error}")
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(4.dp))
+                Row {
+                    Button(
+                        onClick = { onResume(s.sessionId) },
+                        enabled = enabled && s.state != "running"
+                    ) { Text("继续这一轮") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = { onDrop(s.sessionId) }) { Text("丢弃断点") }
+                }
+            }
+        }
+    }
+}
+
+/** 检查点状态的中文说法。`running` 在**本进程**里意味着另有一轮正在跑（此时不给点"继续"）。 */
+private fun resumeStateZh(state: String): String = when (state) {
+    "running" -> "正在运行中"
+    "interrupted" -> "被中断"
+    "failed" -> "上一轮出错中断"
+    else -> state
 }

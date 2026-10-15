@@ -13,7 +13,9 @@ from typing import List
 from .models import Dimension, DimensionScore, ModelProfile, Report, RiskLevel, TestResult, Verdict
 
 
-def build_report(target: ModelProfile, results: List[TestResult]) -> Report:
+def build_report(target: ModelProfile, results: List[TestResult],
+                 resumed_count: int = 0) -> Report:
+    """`resumed_count` = 本轮从检查点复用的条数（断点续测，0=全新一轮），原样写进报告自证。"""
     by_dim: dict = defaultdict(list)
     for r in results:
         by_dim[r.testCase.dimension].append(r)
@@ -76,5 +78,5 @@ def build_report(target: ModelProfile, results: List[TestResult]) -> Report:
     return Report(
         modelProfile=target, timestamp=time.time_ns() // 1_000_000,
         overallScore=round(overall, 1), riskLevel=risk, dimensions=dims,
-        results=results, summary=summary,
+        results=results, summary=summary, resumedCount=resumed_count,
     )

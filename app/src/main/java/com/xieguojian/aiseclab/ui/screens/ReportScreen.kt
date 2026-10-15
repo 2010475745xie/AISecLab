@@ -35,6 +35,7 @@ import androidx.core.content.FileProvider
 import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.tokenSpendLine
+import com.xieguojian.aiseclab.core.model.resumeNote
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.report.ReportDiff
@@ -314,6 +315,18 @@ fun ReportScreen(
                 color = if (report.tokenUsage == null) MaterialTheme.colorScheme.onSurfaceVariant
                 else MaterialTheme.colorScheme.onSurface
             )
+            // ── 断点续测自证：这份报告里哪些条不是本轮跑的 ──
+            // 只在真的复用过时多排一行（resumeNote() 没有复用时返回空串，不渲染）。
+            // 文案唯一源 = Report.resumeNote()，与 Markdown / HTML 导出同源。
+            val resume = report.resumeNote()
+            if (resume.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    resume,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
         }
 
         // ── 复现性档：报告必须自证"别人照着重跑能不能得到同一份结论" ──

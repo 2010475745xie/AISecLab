@@ -14,6 +14,7 @@ import android.os.PowerManager.PARTIAL_WAKE_LOCK
 import androidx.core.app.NotificationCompat
 import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.TestSession
+import com.xieguojian.aiseclab.core.engine.plannedCaseCount
 import com.xieguojian.aiseclab.core.resolveRunMode
 import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.core.api.TokenMeter
@@ -75,6 +76,9 @@ class TestRunService : Service() {
             ?: Dimension.values().toSet()
         val recursive = intent?.getBooleanExtra(EXTRA_RECURSIVE, false) ?: false
         val variants = intent?.getBooleanExtra(EXTRA_VARIANTS, false) ?: false
+        // 断点续测：非空 = 接着这个 sessionId 的检查点跑（复用已完成的用例、只补跑剩下的）。
+        // 只在后端模式有意义 —— 本机跑不落盘，没有断点（UI 侧已按 RunMode 挡住入口）。
+        val resumeFrom = intent?.getStringExtra(EXTRA_RESUME_FROM)?.takeIf { it.isNotBlank() }
 
         val repo = ProfileRepository(this)
         val target = repo.loadTarget()
@@ -124,6 +128,9 @@ class TestRunService : Service() {
                     appendLine("维度：${dims.joinToString("/") { it.label }}")
                     appendLine("递归对抗：$recursive")
                     appendLine("越狱变体集：$variants（${if (variants) "已并入 200 条" else "未并入"}）")
+                    if (resumeFrom != null) {
+                        appendLine("断点续测：$resumeFrom（已完成的用例直接复用、不重跑）")
+                    }
                 }
             )
             val client = BackendClient()
@@ -144,8 +151,24 @@ class TestRunService : Service() {
                         variants = variants,
                         token = repo.loadBackendToken(),
                         onProgress = { c, t -> onProgress(c, t) },
-                        onLog = { TestRunStateHolder.appendLog(it) }
+                        onLog = { TestRunStateHolder.appendLog(it) },
+                        resumeFrom = resumeFrom
                     )
+                    // ── 条数对账（2026-10-15）──
+                    // 端上预告的条数（唯一口径 = core/engine/CasePlan.kt）与后端实际跑出来的
+                    // 条数不一致时，**必须说出原因**，别让用户对着两个数字猜。
+                    // 真实发生过：后端跑的是 10-12 16:24 的冻结出包，而「越狱变体集」开关
+                    // （useJailbreakVariants）是当天 23:05 才进的代码 —— 旧后端不认识这个字段，
+                    // pydantic 默认静默丢弃 → 照旧只跑 50 条。用户看到的就是"配置页 250、跑出来 50"。
+                    val planned = plannedCaseCount(dims, variants)
+                    if (rawReport.results.size != planned) {
+                        TestRunStateHolder.appendLog(
+                            "⚠ 本轮预告 $planned 条，后端实际跑出 ${rawReport.results.size} 条 —— " +
+                                "最常见的原因是**后端不是最新代码**：旧版不认识新加的请求字段" +
+                                "（例如「越狱变体集」开关），会静默丢弃、照旧按老用例集跑。" +
+                                "请用最新源码重启后端，或重新出包。"
+                        )
+                    }
                     // 本轮账单：跑完就落进报告，历史报告翻出来也能看到当时花了多少。
                     // 委托后端的这一路也拿得到 —— SSE 每帧都带累计用量，TokenMeter 已经接住了。
                     val report = rawReport.copy(tokenUsage = TokenMeter.state.value.toTokenUsage())
@@ -310,6 +333,8 @@ class TestRunService : Service() {
         const val EXTRA_DIMENSIONS = "extra_dimensions"
         const val EXTRA_RECURSIVE = "extra_recursive"
         const val EXTRA_VARIANTS = "extra_variants"
+        /** 断点续测：非空 = 接着这个后端会话的检查点跑（复用已完成的用例）。 */
+        const val EXTRA_RESUME_FROM = "extra_resume_from"
         const val ACTION_STOP = "com.xieguojian.aiseclab.action.STOP"
     }
 }
