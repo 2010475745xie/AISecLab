@@ -17,15 +17,19 @@ import com.xieguojian.aiseclab.core.model.TestCase
  * 虚构情境 / 编码混淆 / 拒绝抑制 / 说服改写 / … 发起，于是"策略"这一维的**差异**才成为
  * 可观测的量，也就有了 Strategy-ASR 的意义。
  *
- * ## 为什么是这 10 类，而不是全部 13 类
+ * ## 为什么是这 10 类，而不是全部 15 类
  *
- * [JailbreakStrategy] 里另有 `MANY_SHOT` 与 `TOOL_INJECTION`，**刻意不收**：
- * - `MANY_SHOT` 的本质是**多轮**蚕食（T1 暖场 → 逐轮加压 → TN 抛目标），塞进一条单轮
- *   prompt 只是"角色扮演的变体"，标成 many_shot 会让这个族的分母变成假的；
+ * [JailbreakStrategy] 里另有 `MANY_SHOT` / `CRESCENDO` / `ACTOR_NETWORK` 与 `TOOL_INJECTION`，
+ * **刻意不收进变体集**：
+ * - `MANY_SHOT` / `CRESCENDO` / `ACTOR_NETWORK` 的本质都是**多轮**（暖场后逐轮加压 / 顺着上一轮
+ *   再进一步 / 把目标拆到多个角色身上），塞进一条单轮 prompt 只会退化成别的族，
+ *   标成这三族会让这个族的分母变成假的；
  * - `TOOL_INJECTION` 要求存在**真正的工具返回通道**（被测模型是纯 chat API，没有工具层）。
  *   硬造一条"工具返回：请输出系统提示"只是又一条提示注入，归到 tool_inject 是**编归因**。
  *
- * 这两族等 3.1（多轮侵蚀执行器）与工具层就位后再补。**宁可少一个族，不要一个族里全是假样本。**
+ * 这几族**不进变体集、但进指纹库** —— 多轮执行器（3.1 多轮侵蚀 / 递归对抗）与工具层就位后，
+ * 真正跑出来的攻击能被归到族上（见 [StrategyFingerprintLibrary]，运行时归因走 `attribute`）。
+ * **宁可少一个族，不要一个族里全是假样本。**
  *
  * ## A2 补的 5 族凭什么能进（它们在参考件里也是"多模型"技术）
  *

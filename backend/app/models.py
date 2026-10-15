@@ -92,6 +92,10 @@ class JailbreakStrategy(str, Enum):
     overwrite = "overwrite"
     encoding = "encoding"
     many_shot = "many_shot"
+    # 多轮族（A3，2026-10-15 补，借 FuzzyAI 的 crs / act）。本质是多轮，**不进变体集**
+    # （塞进单轮 prompt 就是编归因），但进指纹库 —— 供多轮执行器跑出来的攻击做归因。
+    crescendo = "crescendo"
+    actor_network = "actor_network"
     fiction = "fiction"
     tool_inject = "tool_inject"
     refusal_suppress = "refusal_suppress"

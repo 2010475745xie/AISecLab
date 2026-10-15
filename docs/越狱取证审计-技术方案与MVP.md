@@ -49,7 +49,7 @@
 
 | # | 落地物 | 复现 |
 |---|---|---|
-| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（17 条 / 12 族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
+| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（19 条 / 14 族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
 | 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字 / 猪拉丁 / Unicode Tag，7 种） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
 | 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
 | 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，200 条 = 20 目标 × 10 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→250 条） |

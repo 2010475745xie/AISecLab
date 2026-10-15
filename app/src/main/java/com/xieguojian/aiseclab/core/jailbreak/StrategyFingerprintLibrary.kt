@@ -280,6 +280,43 @@ object StrategyFingerprintLibrary {
                 """\bprove\s+(that\s+)?you\s+(got|know|solved)\b"""
             ),
             weight = 1.2f
+        ),
+
+        // ── 递进式加压（A3，借 FuzzyAI `crs`）───────────────────────────
+        // Crescendo 的本质是**多轮**：从无害问题起手、每轮顺着上一轮的回答再进一步，
+        // 让对话在"上下文一致"的掩护下漂到敏感目标。参考件要一个辅助 LLM 逐轮生成问题；
+        // 这里只把它**在文本上留下的痕迹**做成指纹 —— 真正用于归因的是多轮执行器跑出来的
+        // 逐轮 prompt（"既然你刚才说了…那就再进一步…"），不是单轮样本。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.CRESCENDO,
+            keywords = listOf("递进式", "层层递进", "逐步升级", "由浅入深", "crescendo"),
+            patterns = listOf(
+                """(既然|既然你).{0,8}(已经|刚才|上面|前面).{0,10}(说|讲|答|给|解释).{0,10}(那|那么|就|现在).{0,8}(再|继续|进一步|接着)""",
+                """(接着|基于|顺着).{0,4}(刚才|上面|前面|之前|你(说|讲)的).{0,12}(继续|进一步|深入|展开)""",
+                """(再|进一步|更深入)\s*(一步|一层|一点).{0,10}(说明|展开|讲讲|深入|解释|细化)""",
+                """(先|从).{0,8}(无害|基础|简单|一般).{0,12}(问题|话题|常识)?.{0,10}(然后|再|逐步|循序渐进).{0,12}(深入|升级|敏感|进阶|核心)""",
+                """\b(building on|following up on|now that you)\b.{0,50}\b(let'?s (go|take it) (further|a step further)|next|go deeper)\b"""
+            ),
+            weight = 1.2f
+        ),
+
+        // ── 角色网络（A3，借 FuzzyAI `act`）─────────────────────────────
+        // Actor-network 攻击：先把目标行为抽出来，再生成一圈"行动者"（创作者 / 执行者 /
+        // 传播者 / 接受者 / 促成者 / 监管者），用"角色链"把有害内容分散到多个身份里问，
+        // 于是任何**单轮**看都不像有害请求。指纹只认它的表面特征：一次会话里铺开多个角色。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.ACTOR_NETWORK,
+            keywords = listOf("角色网络", "行动者网络", "语义网络", "actor network", "actor-network"),
+            patterns = listOf(
+                """(依次|分别|轮流|逐个)扮演.{0,16}(角色|身份|人物|几个|多个|若干)""",
+                """(扮演|模拟).{0,20}(角色|身份|人物).{0,40}(然后|接着|再|之后).{0,20}(扮演|模拟|换成|切换)""",
+                """\b(actor|actors)\b.{0,24}\b(network|networks)\b""",
+                // 六个类别名**成对出现**（清单特征）才算 —— 单说 "creation … actor" 在
+                // 正常英文里也可能是"创作 + 演员"，两词相距 120 字内出现两次则基本只可能是那张表。
+                // 用 [\s\S] 而不是 `.`：清单是**逐行**列的，`.` 不跨换行会漏掉。
+                """\b(creation|execution|distribution|reception|facilitation|regulation)\b[\s\S]{0,120}\b(creation|execution|distribution|reception|facilitation|regulation)\b"""
+            ),
+            weight = 1.1f
         )
     )
 

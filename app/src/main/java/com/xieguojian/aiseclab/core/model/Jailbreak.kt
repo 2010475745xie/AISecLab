@@ -46,6 +46,14 @@ enum class JailbreakStrategy(val id: String, val label: String) {
     @SerialName("overwrite") PROMPT_OVERWRITE("overwrite", "系统提示覆盖"),
     @SerialName("encoding") ENCODING("encoding", "编码混淆"),
     @SerialName("many_shot") MANY_SHOT("many_shot", "多轮蚕食/many-shot"),
+    // ── 多轮族（A3，2026-10-15 补，借 FuzzyAI 的 `crs` / `act`）──────────
+    // 这两族**本质是多轮**：`crescendo` 逐轮升压（无害问题起手、逐步逼近敏感目标），
+    // `actor_network` 用"角色链"迂回（把目标拆到创作/执行/传播…等行动者身上，绕过单轮意图识别）。
+    // 它们**不进变体集**（`JailbreakCases.STRATEGIES`）—— 塞进一条单轮 prompt 就是编归因
+    // （与 [MANY_SHOT] 同理，见该族 KDoc）；
+    // 但它们**进指纹库**，好让多轮执行器（多轮侵蚀 / 递归对抗）真正跑出来的攻击能被归到族上。
+    @SerialName("crescendo") CRESCENDO("crescendo", "递进式加压"),
+    @SerialName("actor_network") ACTOR_NETWORK("actor_network", "角色网络"),
     @SerialName("fiction") FICTIONAL_FRAMING("fiction", "虚构情境"),
     @SerialName("tool_inject") TOOL_INJECTION("tool_inject", "工具返回注入"),
     @SerialName("refusal_suppress") REFUSAL_SUPPRESSION("refusal_suppress", "拒绝抑制/前缀注入"),
