@@ -46,6 +46,8 @@ import com.xieguojian.aiseclab.core.report.ErosionCurve
 import com.xieguojian.aiseclab.core.report.HardeningAdvisor
 import com.xieguojian.aiseclab.core.report.SafetyMetrics
 import com.xieguojian.aiseclab.core.report.cotNote
+import com.xieguojian.aiseclab.core.report.externalNote
+import com.xieguojian.aiseclab.core.report.reproLine
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.chart.BarItem
 import com.xieguojian.aiseclab.ui.chart.ErosionTrack
@@ -282,6 +284,35 @@ fun ReportScreen(
                 report.tokenSpendLine(),
                 style = MaterialTheme.typography.bodyMedium,
                 color = if (report.tokenUsage == null) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        // ── 复现性档：报告必须自证"别人照着重跑能不能得到同一份结论" ──
+        // 档位由 results[] 现算（LLM 裁判 / 多次采样两处最弱环节），不设字段。
+        // 文案唯一源 = core/report/ReproNote.kt（与 Markdown / HTML 导出同源）。
+        item {
+            Spacer(Modifier.height(16.dp))
+            Text("复现性", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(report.reproLine(), style = MaterialTheme.typography.bodyMedium)
+        }
+
+        // ── 外部对照（B4）：本报告的结论有没有第二方印证过 ──
+        // 取数=Report.externalCheck（外部裁判**只对照、不回写判定**），文案唯一源 =
+        // core/report/ExternalNote.kt（与 Markdown / HTML 导出同源）。
+        // 三态必须分得开：未接入 / 接入了但没拿到结果 / 真对照过 —— 前者不是 0% 一致。
+        item {
+            Spacer(Modifier.height(16.dp))
+            Text("外部对照", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            // 未接入 / 没拿到结果是"信息缺失"，用次要色；真拿到对照才用正文色。
+            val ec = report.externalCheck
+            Text(
+                report.externalNote(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (ec == null || ec.compared == 0)
+                    MaterialTheme.colorScheme.onSurfaceVariant
                 else MaterialTheme.colorScheme.onSurface
             )
         }

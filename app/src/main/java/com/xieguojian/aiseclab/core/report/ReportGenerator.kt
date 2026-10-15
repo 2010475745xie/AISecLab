@@ -63,6 +63,13 @@ object ReportGenerator {
         append("\n## 摘要\n\n${report.summary}\n\n")
         // 本轮账单。文案与报告页/HTML 导出同源（Report.tokenSpendLine），别各自拼。
         append("\n## 本次消耗\n\n${report.tokenSpendLine()}\n\n")
+        // 复现性档：报告自证"别人照着重跑能不能得到同一份结论"。
+        // 文案唯一源 = core/report/ReproNote.kt（报告页 / Markdown / HTML 三处同源）。
+        append("## 复现性\n\n${report.reproLine()}\n\n")
+        // 外部对照（B4）：报告自证"结论有没有第二方印证过"。
+        // 文案唯一源 = core/report/ExternalNote.kt（报告页 / Markdown / HTML 三处同源）——
+        // 三态（未接入 / 没拿到结果 / 真对照过）必须分得开，别把"未接入"写成"0% 一致"。
+        append("## 外部对照\n\n${report.externalNote()}\n\n")
         // CoT 处理口径：报告的分数依赖"被测模型有没有内联思考段"，必须自证。
         // 文案唯一源 = core/report/CoTNote.kt（报告页 / Markdown / HTML 三处同源）。
         append("## CoT 处理\n\n${report.cotNote()}\n\n")
@@ -344,6 +351,10 @@ object ReportGenerator {
 
         // 本轮账单：文案与报告页 / Markdown 导出同源（Report.tokenSpendLine）
         append("<h2>本次消耗</h2><p>${escapeHtml(report.tokenSpendLine())}</p>")
+        // 复现性档（文案唯一源 = core/report/ReproNote.kt，与报告页 / Markdown 同源）。
+        append("<h2>复现性</h2><p>${escapeHtml(report.reproLine())}</p>")
+        // 外部对照（B4）：文案唯一源 = core/report/ExternalNote.kt，与报告页 / Markdown 同源。
+        append("<h2>外部对照</h2><p>${escapeHtml(report.externalNote())}</p>")
         // CoT 处理口径（文案唯一源 = core/report/CoTNote.kt，与报告页 / Markdown 同源）。
         append("<h2>CoT 处理</h2><p>${escapeHtml(report.cotNote())}</p>")
 

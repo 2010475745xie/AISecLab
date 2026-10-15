@@ -43,7 +43,7 @@
 > 每项标注：**实现要点 / 验收标准 / 落在现有代码的位置**。
 > 现有扩展点：`AttackModule`、`Judge`、`LlmJudge(chat, roles)`、`ScoringModel`、`ReportGenerator`。
 
-### 落地状态（2026-10-14 快照）
+### 落地状态（2026-10-15 快照）
 
 **✓ 已完成 10 项（周 1 地基全部 + 取证核心三块 + 半妥协检测 + 拒绝打分 + 取证报告）**
 
@@ -60,6 +60,18 @@
 | 3.5 | **加固建议**：`core/report/HardeningAdvisor.kt` + `core/report/DefenseAttribution.kt`（归因判据**全项目唯一实现**）。**纯规则映射表，不是 LLM 现场生成** —— 8 个策略族一个不落；按「策略族 × 先失效层」聚合、按中招条数降序；定位不出层的仍给策略级建议并单列 `unattributed`。报告页 / Markdown / HTML 三处同源 | `HardeningAdvisorTest`（10 条）+ `ReportGeneratorHardeningTest`（6 条，专钉导出侧接线） |
 | 4.1 | **取证报告**：四维报告 + 4 张图 + 策略×意图矩阵 + 破防步数 + 失效层归因 + 加固建议，报告页 / Markdown / HTML 三处同源 | 验收「一份报告能回答**为什么破 / 第几轮破 / 怎么修**」**已达成**（3.3 + 3.4 + 3.5 齐备） |
 
+**能力升级批次（借 FuzzyAI / Heretic，逐项设计与证据见 `docs/参考项目-能力升级路线.md`）**
+
+| # | 落地物 | 复现 |
+|---|---|---|
+| A1 | 编码族 **+2**（猪拉丁 / Unicode Tag）：生成器 ↔ 还原器共用同一张表 | `JailbreakVariantsTest`、`backend/_verify_encodings.py` |
+| B1 | **CoT 治理**：判拒绝/半妥协前剥内联思考段；命中类判据读完整响应；报告自证剥了几条 | `CoTGovernanceTest`、`_shot/probe-cot-risk.py`（13 条断言） |
+| A2 | 说服族 **+5**（说服改写 / 说服分类学 / 历史学术包装 / 思维实验 / 游戏化）；变体集 **100 → 200** | 两端枚举 + 指纹（19 条 / 15 族）+ `tools/check-jailbreak-parity.py`、`backend/smoke_test.py` |
+| A3 | 多轮族归因 **+2**（Crescendo / Actor 网络）—— **只进枚举与指纹、不进变体集**（单轮假样本 = 编归因） | 同上 |
+| A4 | **攻击参数空间搜索**：TPE 多目标 + 预算闸门 + 断点续跑 + 不可复现显式标记 | `tools/attack-search.py`、`_shot/_a4-verify.py`（12 条断言，含"TPE 到底在不在学"） |
+| B5 | **复现性显式档**：报告里人读的三档（确定性 / 采样可复现 / 不可复现），取**最弱环节** | `ReproNoteTest`（6 条）+ 报告页 / Markdown / HTML 三处同源 |
+| B4 | **外部裁判接入形状**：接口 + 三条纪律（只对照不回写 / 失败≠分歧 / 只问该不该拒绝）+ 三态文案 | `ExternalJudgeTest`（9 条）。⚠️ **只交付形状：未接真供应商，生产运行恒为「未接入」**；真接入属 4.4 |
+
 **~ 部分完成 4 项**：2.3 置信门控（门控已有，"低置信升级链路可观测"未做）、
 3.1 多轮侵蚀执行器（`RecursiveAdversarialAttack` 已有，非 T1 暖场→加压→TN 结构）、
 3.2 逐轮记录（`AttackRound` 已落 prompt/response/refused/**compliance**，仍缺 `refusalStrength`/`toolCalls`；
@@ -67,7 +79,9 @@
 3.4 分层破防归因（**已按可证伪口径落地**：只归 `PLANNING`/`OUTPUT` 两层，
 输入层与工具层对纯 chat API 不可观测、明写"不适用"而不计 0；见下方隐患）。
 
-**✗ 未开始 2 项**：4.3 内部信号、4.4 众测对比。
+**✗ 未开始 2 项**：4.3 内部信号、4.4 众测对比
+（4.4 的**前置**——B4 外部裁判的接入形状——已就位，见上表；**真接 2~3 家外部 API 仍未做**，
+要 key 与配额。形状 ≠ 外部效度，别混）。
 
 > ⚠️ **2.1 只交付了「打分器」，还没接进数据流**：`RefusalScorer` 目前被
 > `ResponseContext.isRefusal` 使用（即拒绝/半妥协的分层），但

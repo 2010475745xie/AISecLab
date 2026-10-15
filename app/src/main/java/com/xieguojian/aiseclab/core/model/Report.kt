@@ -22,7 +22,18 @@ data class Report(
      * `null` = 这份报告没有用量记录（旧版本生成的报告，或本轮一次模型调用都没发起）。
      * 展示时必须说「未记录」，**不能显示成 0** —— 「没记录」和「一次没烧」是两回事。
      */
-    val tokenUsage: TokenUsage? = null
+    val tokenUsage: TokenUsage? = null,
+    /**
+     * 外部安全 API 的**对照结果**（B4）。`null` = 本轮未接入外部裁判。
+     *
+     * 展示时必须说「未接入」—— **不能显示成一致率 0%**：「没接入」与「完全不同意」
+     * 是两回事（同「没采集 ≠ 很差」）。文案唯一源 = `core/report/ExternalNote.kt`。
+     *
+     * 字段名与后端 `app/models.py::Report` 不要求一致 —— 这一项**没有后端对应物**：
+     * 外部裁判是端上的对照件（在本地判定链之外旁挂一路），后端那条链不参与，
+     * 所以这里的 null 也可能是「后端产的报告」，同样按「未接入」展示。
+     */
+    val externalCheck: ExternalCheck? = null
 )
 
 /**
