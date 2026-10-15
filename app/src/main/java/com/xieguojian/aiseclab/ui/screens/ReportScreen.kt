@@ -24,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -81,10 +82,37 @@ fun ReportScreen(
 
     // 最近一次导出的文件，用于展示"已保存"提示 + 分享按钮
     var exportedFile by remember { mutableStateOf<File?>(null) }
-    // 是否展开"选基线"面板
-    var showBaselinePicker by remember { mutableStateOf(false) }
-    // 策略×意图矩阵在手机上占屏较多（5 族 × 至多 8 个意图），默认收起
-    var showMatrix by remember { mutableStateOf(false) }
+
+    // ── 折叠状态（2026-10-15 加）────────────────────────────────────────
+    //
+    // 为什么要折叠：报告页 18 个区块、手机上要滑十几屏才到底。「多危险 / 怎么修」这些
+    // 结论本该一屏可见，却被图表和逐条证据挤到了后面。
+    //
+    // ★ 三条纪律（折叠不是"顺手折一下"那么简单）：
+    //  1. **折叠 ≠ 不渲染**。它是**用户可控的视图偏好**，与「没采集要靠不写来表达」是两回事
+    //     （后者被明令禁止，先例：多轮侵蚀已改成无条件成章）。判据：**默认收起**的节，
+    //     标题旁必须挂 [SectionHeader] 的 captions —— 折叠态下结论一句话仍然读得到。
+    //  2. **口径说明不进折叠体**。scopeNote / exclusionNote /「未采集」这类自证文字留在
+    //     captions 里（折叠时可见）。藏进折叠体会让"屏幕上的报告"与导出件读起来不一样 ——
+    //     导出件（Markdown / HTML）根本没有折叠这个概念。
+    //  3. **默认值按"是不是结论"定**：结论类默认展开，图表 / 逐条证据 / 长尾默认收起。
+    //
+    // ⚠️ 用 rememberSaveable 而不是 remember：后者在转屏 / Activity 重建时全部复位，
+    //    用户刚展开的那一节会自己合上（报告页很长，这个体验很糟）。
+    // 两个已折的先例（策略×意图、选基线面板）一并归到这套写法，不再各写各的。
+    var showBaselinePicker by rememberSaveable { mutableStateOf(false) }
+    var showMatrix by rememberSaveable { mutableStateOf(false) }    // 策略×意图：默认收起
+    var showMetrics by rememberSaveable { mutableStateOf(true) }    // 安全指标：结论，默认展开
+    var showDims by rememberSaveable { mutableStateOf(true) }       // 分维度得分：结论，默认展开
+    var showFails by rememberSaveable { mutableStateOf(true) }      // 失守明细：核心证据，默认展开
+    var showHeatmap by rememberSaveable { mutableStateOf(false) }   // 以下：图表 / 长尾，默认收起
+    var showSections by rememberSaveable { mutableStateOf(false) }
+    var showLevels by rememberSaveable { mutableStateOf(false) }
+    var showTrail by rememberSaveable { mutableStateOf(false) }
+    var showErosion by rememberSaveable { mutableStateOf(false) }
+    var showReview by rememberSaveable { mutableStateOf(false) }
+    var showSkipped by rememberSaveable { mutableStateOf(false) }
+    var showInconclusive by rememberSaveable { mutableStateOf(false) }
 
     if (report == null) {
         // 空状态**居中**：原先顶在左上角，平板上尤其像"页面没加载完"。
@@ -333,24 +361,31 @@ fun ReportScreen(
         if (metrics.evaluated + metrics.unassessed > 0) {
             item {
                 Spacer(Modifier.height(20.dp))
-                Text("安全指标", style = MaterialTheme.typography.titleMedium)
+                SectionHeader(
+                    title = "安全指标",
+                    expanded = showMetrics,
+                    onToggle = { showMetrics = !showMetrics },
+                    lead = "已判定 ${metrics.evaluated} 条 · 不可评估 ${metrics.unassessed} 条"
+                )
                 Spacer(Modifier.height(6.dp))
             }
-            item { MetricsPanel(metrics) }
+            if (showMetrics) item { MetricsPanel(metrics) }
             if (metrics.matrixUsable) {
                 item {
                     Spacer(Modifier.height(10.dp))
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text("策略 × 意图", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                        TextButton(onClick = { showMatrix = !showMatrix }) {
-                            Text(if (showMatrix) "收起" else "展开")
-                        }
-                    }
-                    Text(
-                        ChartLegend.MATRIX,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    SectionHeader(
+                        title = "策略 × 意图",
+                        expanded = showMatrix,
+                        onToggle = { showMatrix = !showMatrix }
                     )
+                    // 图例说明的是**展开后那张图**，跟着 body 一起藏：图看不到，图例就是无主的文字。
+                    if (showMatrix) {
+                        Text(
+                            ChartLegend.MATRIX,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 if (showMatrix) {
                     item {
@@ -389,47 +424,74 @@ fun ReportScreen(
         // 图例文案与 HTML 导出共用 core/report/ChartLegend，避免两处说法不一致。
         item {
             Spacer(Modifier.height(20.dp))
-            Text("用例热力图", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            MiniHeatmap(report.results)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                ChartLegend.HEATMAP,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            // 默认收起：几十格的热力图占屏大，而它的结论（失守几条）摘要与安全指标已经说过。
+            // captions 是折叠态下**唯一**能读到的东西，所以必须自带结论，不能只是"这里有个图"。
+            SectionHeader(
+                title = "用例热力图",
+                expanded = showHeatmap,
+                onToggle = { showHeatmap = !showHeatmap },
+                lead = "${report.results.size} 格 = 每条用例 · 失守 ${sections.fails.size} 条"
             )
-        }
-
-        item {
-            Spacer(Modifier.height(18.dp))
-            Text("分区分布", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            MiniBar(
-                listOf(
-                    BarItem("失守", sections.fails.size, ChartPalette.FAIL),
-                    BarItem("待人工复核", sections.reviewOnly.size, ChartPalette.INCONCLUSIVE),
-                    BarItem("通过", sections.passPlain.size, ChartPalette.PASS),
-                    BarItem("不可评估·调用失败", sections.skipped.size, ChartPalette.SKIPPED),
-                    BarItem("不可评估·判定拿不准", sections.inconclusive.size, ChartPalette.INCONCLUSIVE)
+            if (showHeatmap) {
+                Spacer(Modifier.height(6.dp))
+                MiniHeatmap(report.results)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    ChartLegend.HEATMAP,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                ChartLegend.BARS,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            }
         }
 
         item {
             Spacer(Modifier.height(18.dp))
-            Text("判定层级分布", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
-            MiniBar(
-                JudgeLevel.values().map { lv ->
-                    BarItem(levelLabel(lv), levelCount(report, lv), ChartPalette.PASS)
-                }
+            // 默认收起。caption 把五个分区**直接念成数**：折叠态一眼就能读出分布，
+            // 不用展开才知道有没有失守（否则收起等于把结论藏了）。
+            SectionHeader(
+                title = "分区分布",
+                expanded = showSections,
+                onToggle = { showSections = !showSections },
+                lead = "失守 ${sections.fails.size} · 待复核 ${sections.reviewOnly.size} · " +
+                    "通过 ${sections.passPlain.size} · " +
+                    "不可评估 ${sections.skipped.size + sections.inconclusive.size}"
             )
+            if (showSections) {
+                Spacer(Modifier.height(6.dp))
+                MiniBar(
+                    listOf(
+                        BarItem("失守", sections.fails.size, ChartPalette.FAIL),
+                        BarItem("待人工复核", sections.reviewOnly.size, ChartPalette.INCONCLUSIVE),
+                        BarItem("通过", sections.passPlain.size, ChartPalette.PASS),
+                        BarItem("不可评估·调用失败", sections.skipped.size, ChartPalette.SKIPPED),
+                        BarItem("不可评估·判定拿不准", sections.inconclusive.size, ChartPalette.INCONCLUSIVE)
+                    )
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    ChartLegend.BARS,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        item {
+            Spacer(Modifier.height(18.dp))
+            SectionHeader(
+                title = "判定层级分布",
+                expanded = showLevels,
+                onToggle = { showLevels = !showLevels },
+                lead = "共 ${report.results.size} 条判定记录"
+            )
+            if (showLevels) {
+                Spacer(Modifier.height(6.dp))
+                MiniBar(
+                    JudgeLevel.values().map { lv ->
+                        BarItem(levelLabel(lv), levelCount(report, lv), ChartPalette.PASS)
+                    }
+                )
+            }
         }
 
         // ── 基线对比 ──
@@ -512,12 +574,18 @@ fun ReportScreen(
         }
 
         // ── 分维度得分：标题紧跟卡片，别再被别的区块隔开 ──
+        // 默认展开：它是「哪个维度差」的结论，属于该先看到的那一类。
         item {
             Spacer(Modifier.height(20.dp))
-            Text("分维度得分", style = MaterialTheme.typography.titleMedium)
+            SectionHeader(
+                title = "分维度得分",
+                expanded = showDims,
+                onToggle = { showDims = !showDims },
+                lead = "${report.dimensions.size} 个维度"
+            )
         }
 
-        items(report.dimensions.values.sortedBy { it.dimension.ordinal }.toList()) { d ->
+        if (showDims) items(report.dimensions.values.sortedBy { it.dimension.ordinal }.toList()) { d ->
             val unassessedHere = unassessedByDim[d.dimension] ?: 0
             Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                 Column(Modifier.padding(14.dp)) {
@@ -560,23 +628,28 @@ fun ReportScreen(
         if (trailCases.isNotEmpty()) {
             item {
                 Spacer(Modifier.height(20.dp))
-                Text("攻击演进", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    ChartLegend.TIMELINE,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                // 「这里只显示前 N 条」是**取样口径**，必须留在 captions（折叠也可见）——
+                // 藏进折叠体，读者会把看到的 N 条当成全部。
+                SectionHeader(
+                    title = "攻击演进",
+                    expanded = showTrail,
+                    onToggle = { showTrail = !showTrail },
+                    lead = "${trailCases.size} 条用例有多步攻击",
+                    captions = listOfNotNull(
+                        if (trailCases.size > TRAIL_CASES_SHOWN)
+                            "这里按步数取前 $TRAIL_CASES_SHOWN 条展示。" else null
+                    )
                 )
-                if (trailCases.size > TRAIL_CASES_SHOWN) {
+                if (showTrail) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "共 ${trailCases.size} 条用例有多步攻击，这里按步数取前 $TRAIL_CASES_SHOWN 条。",
+                        ChartLegend.TIMELINE,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-            items(trailCases.take(TRAIL_CASES_SHOWN)) { r ->
+            if (showTrail) items(trailCases.take(TRAIL_CASES_SHOWN)) { r ->
                 Card(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
                     Column(Modifier.padding(14.dp)) {
                         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -617,55 +690,62 @@ fun ReportScreen(
         // 而「本次没采集多步证据」本身就是审计要看见的结论，不能靠「不显示」来表达。
         item {
             Spacer(Modifier.height(20.dp))
-            Text("多轮侵蚀", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                ChartLegend.EROSION,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+            // ⚠️ headline 与三条「信号不一致」说明**必须留在 lead / captions**（折叠也可见）：
+            // 它们是「失守 0 条」与「某步无拒绝话术」同时出现时的解释 —— 不显示的话，
+            // 读者只会认为报告在瞎算（真机验证时就是这么撞上的）。折起来的只有图（轨迹 / 表）。
+            SectionHeader(
+                title = "多轮侵蚀",
+                expanded = showErosion,
+                onToggle = { showErosion = !showErosion },
+                lead = erosion.headline,
+                captions = listOf(erosion.exclusionNote, erosion.disagreementNote, erosion.unresolvedNote)
+                    .filter { it.isNotEmpty() }
             )
-            Spacer(Modifier.height(8.dp))
-            Text(erosion.headline, style = MaterialTheme.typography.bodyMedium)
-            // 两条「信号不一致」的说明必须跟着 headline 显示：
-            // 它们是「失守 0 条」与「某步无拒绝话术」同时出现时的解释，
-            // 不显示的话读者只会认为报告在瞎算（真机验证时就是这么撞上的）。
-            listOf(erosion.exclusionNote, erosion.disagreementNote, erosion.unresolvedNote)
-                .filter { it.isNotEmpty() }
-                .forEach {
+        }
+        if (showErosion) {
+            if (erosion.evaluated > 0) {
+                item {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        it,
+                        ChartLegend.EROSION,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-        }
-        if (erosion.evaluated > 0) {
-            item {
-                Spacer(Modifier.height(10.dp))
-                ErosionTrack(erosion)
-            }
-            item {
-                Spacer(Modifier.height(12.dp))
-                ErosionTable(erosion)
-            }
-        } else {
-            item {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    ChartLegend.EROSION_EMPTY,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                item {
+                    Spacer(Modifier.height(10.dp))
+                    ErosionTrack(erosion)
+                }
+                item {
+                    Spacer(Modifier.height(12.dp))
+                    ErosionTable(erosion)
+                }
+            } else {
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        ChartLegend.EROSION_EMPTY,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
+        // 默认展开：这是审计要**逐条看证据**的地方，不该一进来就藏起来。但它同样可折 ——
+        // 几十张卡片在手机上要滑很多屏，想先看后面的维度得分时能收起来。
+        // 没有失守时不给折叠按钮（内容只有一句结论，折它没有意义）。
+        val fails = sections.fails
         item {
             Spacer(Modifier.height(20.dp))
-            Text("失守明细", style = MaterialTheme.typography.titleMedium)
+            SectionHeader(
+                title = "失守明细",
+                expanded = showFails,
+                onToggle = if (fails.isEmpty()) null else { { showFails = !showFails } },
+                lead = if (fails.isEmpty()) null else "${fails.size} 条"
+            )
         }
 
-        val fails = sections.fails
         if (fails.isEmpty()) {
             item {
                 Text(
@@ -673,7 +753,7 @@ fun ReportScreen(
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
-        } else {
+        } else if (showFails) {
             items(fails) { r -> FindingItem(r) }
         }
 
@@ -683,14 +763,20 @@ fun ReportScreen(
         if (reviewOnly.isNotEmpty()) {
             item {
                 Spacer(Modifier.height(16.dp))
-                Text("待人工复核 ${reviewOnly.size} 条", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，或三角色投票分裂）。" +
-                        "不影响总分，但可靠性不如一致通过，值得扫一眼。",
-                    style = MaterialTheme.typography.bodySmall
+                // 默认收起。那段解释是**口径**（"判成通过、为什么仍可疑"），
+                // 收起来也得看得见 → 放在 captions 而不是 body。
+                SectionHeader(
+                    title = "待人工复核",
+                    expanded = showReview,
+                    onToggle = { showReview = !showReview },
+                    lead = "${reviewOnly.size} 条",
+                    captions = listOf(
+                        "这些用例判定为通过，但证据链里存在未消解的分歧（规则层与 LLM 结论相反，或三角色投票分裂）。" +
+                            "不影响总分，但可靠性不如一致通过，值得扫一眼。"
+                    )
                 )
             }
-            items(reviewOnly) { r -> FindingItem(r) }
+            if (showReview) items(reviewOnly) { r -> FindingItem(r) }
         }
 
         // 不可评估的用例单独列出来：既不冒充失守，也不静默丢掉。
@@ -698,27 +784,35 @@ fun ReportScreen(
         if (skippedResults.isNotEmpty()) {
             item {
                 Spacer(Modifier.height(16.dp))
-                Text("不可评估 · 调用失败 ${skippedResults.size} 条", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "这几条没能拿到有效回答（接口异常 / 限流 / 超时），已从失守率与总分中剔除。" +
-                        "它们不代表模型有风险，也不代表模型安全；查网络与配额，别去查模型。",
-                    style = MaterialTheme.typography.bodySmall
+                SectionHeader(
+                    title = "不可评估 · 调用失败",
+                    expanded = showSkipped,
+                    onToggle = { showSkipped = !showSkipped },
+                    lead = "${skippedResults.size} 条",
+                    captions = listOf(
+                        "这几条没能拿到有效回答（接口异常 / 限流 / 超时），已从失守率与总分中剔除。" +
+                            "它们不代表模型有风险，也不代表模型安全；查网络与配额，别去查模型。"
+                    )
                 )
             }
-            items(skippedResults) { r -> SkippedItem(r) }
+            if (showSkipped) items(skippedResults) { r -> SkippedItem(r) }
         }
 
         if (inconclusiveResults.isNotEmpty()) {
             item {
                 Spacer(Modifier.height(16.dp))
-                Text("不可评估 · 判定拿不准 ${inconclusiveResults.size} 条", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "三角色裁判没形成多数结论，同样已剔出分母。这些是「判定链」的问题（不是模型的），" +
-                        "建议看分歧记录、必要时人工复核。",
-                    style = MaterialTheme.typography.bodySmall
+                SectionHeader(
+                    title = "不可评估 · 判定拿不准",
+                    expanded = showInconclusive,
+                    onToggle = { showInconclusive = !showInconclusive },
+                    lead = "${inconclusiveResults.size} 条",
+                    captions = listOf(
+                        "三角色裁判没形成多数结论，同样已剔出分母。这些是「判定链」的问题（不是模型的），" +
+                            "建议看分歧记录、必要时人工复核。"
+                    )
                 )
             }
-            items(inconclusiveResults) { r -> SkippedItem(r) }
+            if (showInconclusive) items(inconclusiveResults) { r -> SkippedItem(r) }
         }
 
         item {
@@ -826,6 +920,46 @@ private fun ErosionRow(c: ErosionCurve) {
 
 /** 分位数显示：null = 该族一条都没破防 → `--`（不能显示 0.0）。 */
 private fun oneDecimal(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
+
+/**
+ * 可折叠章节的标题行（2026-10-15 加）。**折叠样式的唯一源** —— 各节不许自己写一套。
+ *
+ * 四个参数各管一件事：
+ *  · [onToggle] 为 null = 本节不可折，标题就是纯标题；
+ *  · [lead] 是**折叠时也可见**的那句结论（正文色、bodyMedium）—— 默认收起的节，
+ *    用户第一眼看到的就是折叠态，所以它必须一句话说清"这节讲了什么"；
+ *  · [captions] 是折叠时也可见的**口径 / 自证**说明（次要色、bodySmall）。
+ *    ⚠️ scopeNote / exclusionNote /「本轮只显示前 N 条」这类文字属于 captions，**不许塞进 body**：
+ *    塞进去之后"屏幕上的报告"就比导出件少一句话，而导出件（Markdown / HTML）根本没有折叠 ——
+ *    更糟的是读者会把"看到的 N 条"当成全部（取样口径被藏起来 = 隐性撒谎）。
+ *  · [expanded] 只决定 body 显不显示，**不决定本节存不存在** —— 标题永远在（同「无条件成章」）。
+ */
+@Composable
+private fun SectionHeader(
+    title: String,
+    expanded: Boolean = true,
+    onToggle: (() -> Unit)? = null,
+    lead: String? = null,
+    captions: List<String> = emptyList()
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            if (onToggle != null) {
+                // 按钮只说"展开/收起"、不带节名：节名就在左边，重复一遍会把窄屏这行挤爆。
+                TextButton(onClick = onToggle) { Text(if (expanded) "收起" else "展开") }
+            }
+        }
+        lead?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+        captions.forEach {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 /**
  * 加固建议面板（方案 §3.5）：取证闭环的最后一问「怎么修」。
