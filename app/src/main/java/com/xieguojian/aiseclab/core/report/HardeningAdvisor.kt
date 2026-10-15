@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab.core.report
 
+import com.xieguojian.aiseclab.core.model.ExpectedBehavior
 import com.xieguojian.aiseclab.core.model.JailbreakStrategy
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
@@ -23,6 +24,10 @@ import com.xieguojian.aiseclab.core.model.Verdict
  * ── 口径 ──
  *
  * · 只对**判定失守**（[Verdict.FAIL]）的用例出建议：通过的用例没有要修的东西。
+ * · 只对**攻击类**用例（`expected == SHOULD_REFUSE`）出建议：本节的映射是「攻击手法 ×
+ *   先失效护栏层」方向的，而事实性 / 逻辑一致性 / 鲁棒性维度的失守没有「攻击手法」可言，
+ *   硬套会给出**方向错误**的建议（2026-10-15 真机验收发现，详见 [HardeningReport.excludedNonAttack]）。
+ *   被排除的条数显式报出，不静默（[HardeningReport.scopeNote]）。
  * · 聚合键是「策略族 × 先失效的护栏层」：同一手法、同一失效层的失守合并成一条，
  *   带上是几条用例中招。**修法相同的不重复列**，免得报告里十条一模一样的建议。
  * · 定位不出护栏层的（没有逐轮记录，或逐轮全程未破防）仍然出**策略级**建议 ——
@@ -57,7 +62,24 @@ object HardeningAdvisor {
          * 失守但**定位不出护栏层**的条数（没有逐轮记录 / 逐轮全程仍能看到拒绝话术）。
          * 与指标面板的「不可归因」是同一个口径，必须一起看：它不是 0，是「没测到」。
          */
-        val unattributed: Int
+        val unattributed: Int,
+        /**
+         * 判定失守、但因**不属于攻击类**（`expected != SHOULD_REFUSE`）而**不进本节**的条数 ——
+         * 事实性 / 逻辑一致性 / 鲁棒性维度的失守。
+         *
+         * ## 为什么要把它们排除掉（2026-10-15 真机验收改）
+         *
+         * 本节的建议是「**攻击手法 × 先失效护栏层**」方向的映射（每条建议都指回一个
+         * [JailbreakStrategy]）。非攻击类失守**没有攻击手法可言** —— 它们的 `strategy`
+         * 反序列化后一律落在 `NONE`，于是会被归进「纯直问（基线）」，
+         * 拿到「直问即失守，说明基础安全对齐不足…需要安全微调 / RLHF」。
+         * 那条建议对「模型编造了不存在的事实」**方向完全不对** ——
+         * 报告里给出一条方向错误的加固建议，比不给建议更糟（有人会照着做）。
+         *
+         * 真机现场同屏读到的正是这个矛盾：左边指标写「无攻击类失守」，右边加固建议写
+         * 「纯直问（基线）1 条中招」。
+         */
+        val excludedNonAttack: Int = 0
     ) {
         val isEmpty: Boolean get() = items.isEmpty()
         /** 覆盖的失守总条数（= 各 item 的 cases 之和）。 */
@@ -81,6 +103,33 @@ object HardeningAdvisor {
             get() = if (unattributed == 0) "" else
                 "其中 $unattributed 条失守没能定位到失效层（没有逐轮记录），" +
                     "这些用例的建议只到策略级；跑多轮（配辅助模型 + 打开递归对抗）才能拿到分层归因。"
+
+        /**
+         * 本节的**范围说明** —— 覆盖了什么、没覆盖什么。**唯一源**（报告页 / Markdown / HTML 同源）。
+         *
+         * ## 三种情形分开说（这是本节最容易被误读的地方）
+         *
+         * 1. 有建议、也没有被排除的 → 空串（没什么要解释的）；
+         * 2. 有建议、但有非攻击类失守被排除 → 报出条数，并**明说方向不同、不许套用**；
+         * 3. **攻击类失守 0 条** → 也要有话说（"本节没有东西"本身就是结论），
+         *    并（若有）带上被排除的条数。
+         *
+         * ⚠️ 情形 3 是本次改动的重点：**不能靠"整块不渲染"来表达"没有攻击类失守"** ——
+         * 那与「没采集要靠不写来表达」是同一个毛病（先例：多轮侵蚀已改成无条件成章）。
+         * 而且它恰好是这份报告「指标写无攻击类失守、却又冒出 1 条中招」那个矛盾的解药。
+         */
+        val scopeNote: String
+            get() {
+                val excluded = if (excludedNonAttack == 0) "" else
+                    "另有 $excludedNonAttack 条失守属于非攻击类维度（事实性 / 逻辑一致性 / 鲁棒性），" +
+                        "不在本节：它们没有「攻击手法」可言，加固方向也不同（见各维度结论），" +
+                        "不套用这里的建议。"
+                return when {
+                    items.isNotEmpty() -> excluded
+                    excludedNonAttack > 0 -> "本轮没有攻击类用例失守。$excluded"
+                    else -> "本轮没有攻击类用例失守 —— 没有需要加固的攻击面。"
+                }
+            }
     }
 
     /** 按策略族的加固方案。15 个策略族一个不落，保证任何一条失守都能拿到建议。 */
@@ -182,11 +231,17 @@ object HardeningAdvisor {
     )
 
     /**
-     * 由失守用例生成加固建议。传 [ReportSections.fails] 或任意 TestResult 列表均可
-     * （内部会再按 [Verdict.FAIL] 过滤一次，传进来非失守的会被忽略）。
+     * 由失守用例生成加固建议。传 [ReportSections.fails] 或任意 TestResult 列表均可。
+     *
+     * 内部做两道过滤 —— 调用方**不要**在外面再过滤一遍（那样判据就散到三处渲染里去了）：
+     *  1. 只留 [Verdict.FAIL]：传进来非失守的会被忽略；
+     *  2. 只留**攻击类**（`expected == SHOULD_REFUSE`）：非攻击类失守没有「攻击手法」可言，
+     *     套用本节的映射会给出**方向错误**的建议（详见 [HardeningReport.excludedNonAttack]）。
+     *     被排除的条数由 [HardeningReport.scopeNote] 显式报出，**不静默吞掉**。
      */
     fun advise(failed: List<TestResult>): HardeningReport {
-        val fails = failed.filter { it.judgeResult.verdict == Verdict.FAIL }
+        val allFails = failed.filter { it.judgeResult.verdict == Verdict.FAIL }
+        val fails = allFails.filter { it.testCase.expected == ExpectedBehavior.SHOULD_REFUSE }
         val grouped = fails.groupBy { it.testCase.strategy to DefenseAttribution.layerOf(it) }
 
         val items = grouped.map { (key, group) ->
@@ -210,6 +265,10 @@ object HardeningAdvisor {
             .filter { it.key.second == null }
             .sumOf { it.value.size }
 
-        return HardeningReport(items = items, unattributed = unattributed)
+        return HardeningReport(
+            items = items,
+            unattributed = unattributed,
+            excludedNonAttack = allFails.size - fails.size,
+        )
     }
 }

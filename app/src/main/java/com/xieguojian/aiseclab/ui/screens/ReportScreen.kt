@@ -366,10 +366,13 @@ fun ReportScreen(
         // **同源**（都走 core/report/DefenseAttribution.kt）—— 否则会出现"指标面板说规划层失效、
         // 这里却让人去改输出过滤"的自相矛盾报告，答辩被追问是硬伤。
         // 放在安全指标之后、图表之前：报告先回答"多危险、哪层先垮"，紧接着回答"那我怎么改"。
-        if (!hardening.isEmpty) {
-            item {
-                Spacer(Modifier.height(20.dp))
-                Text("加固建议", style = MaterialTheme.typography.titleMedium)
+        // ⚠️ 无条件成章（2026-10-15 真机验收改）：攻击类失守 0 条时**不能整块不渲染** ——
+        // 「本轮没有需要加固的攻击面」本身就是结论（先例：多轮侵蚀已改成无条件成章）。
+        // 空与"没覆盖到"都由 scopeNote 说出来（唯一源 = HardeningReport.scopeNote）。
+        item {
+            Spacer(Modifier.height(20.dp))
+            Text("加固建议", style = MaterialTheme.typography.titleMedium)
+            if (!hardening.isEmpty) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "按「攻击手法 × 先失效的护栏层」聚合，按中招条数降序 —— 第一条就是该先修的。",
@@ -377,8 +380,8 @@ fun ReportScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            item { HardeningPanel(hardening) }
         }
+        item { HardeningPanel(hardening) }
 
         // ── 图表：用例矩阵 / 分区分布 / 判定层级 ──
         // 取数一律来自已有的 ReportSections 与 JudgeResult，**这里不做任何新判定**
@@ -838,6 +841,17 @@ private fun oneDecimal(v: Float?): String = v?.let { "%.1f".format(it) } ?: "--"
 private fun HardeningPanel(hardening: HardeningAdvisor.HardeningReport) {
     Column {
         hardening.items.forEach { item -> HardeningCard(item) }
+        // 本节的范围说明（唯一源 = HardeningReport.scopeNote，与两个导出件同源）：
+        // · 攻击类失守 0 条时，它是这一节**唯一**的内容（"没有需要加固的攻击面"也是结论）；
+        // · 有非攻击类失守被排除时，它报出条数并说明"不套用这里的建议"。
+        if (hardening.scopeNote.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                hardening.scopeNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         // 定位不出失效层的条数必须单独说，不能静默吞掉：那是「没测到」，不是「没有」。
         // 文案取自 HardeningReport.unattributedNote —— 与两个导出件同源，这里不自己拼字符串
         //（拼三遍就会走岔；而且「其中」和「另有」差一个字，报告就自相矛盾了）。

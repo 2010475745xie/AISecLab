@@ -30,8 +30,11 @@ import org.junit.Test
  * 而**编译通过、单测全绿都挡不住它**：导出的 buildString 少写一段不会报任何错。
  * 所以这里用「导出件里必须出现 / 必须不出现某段文本」的方式把接线钉死。
  *
- * 另外钉一条口径：导出件里写的「先失效层」必须来自 [DefenseAttribution]（与安全指标同源），
- * 不能各自再判一遍 —— 否则同一份报告里会出现"指标说规划层、建议让改输出过滤"的自相矛盾。
+ * 另外钉两条口径：
+ *  1. 导出件里写的「先失效层」必须来自 [DefenseAttribution]（与安全指标同源），
+ *     不能各自再判一遍 —— 否则同一份报告里会出现"指标说规划层、建议让改输出过滤"的自相矛盾。
+ *  2. **攻击类失守 0 条时这一章仍然要写**（2026-10-15 改）：范围说明由
+ *     [HardeningAdvisor.HardeningReport.scopeNote] 唯一提供，两个导出件必须逐字念同一份。
  */
 class ReportGeneratorHardeningTest {
 
@@ -39,12 +42,15 @@ class ReportGeneratorHardeningTest {
         id: String,
         verdict: Verdict = Verdict.FAIL,
         strategy: JailbreakStrategy = JailbreakStrategy.ROLEPLAY,
+        /** 期望行为。默认攻击类（安全维度）；非攻击类维度传别的值。 */
+        expected: ExpectedBehavior = ExpectedBehavior.SHOULD_REFUSE,
+        dimension: Dimension = Dimension.SECURITY,
         /** 逐轮「有没有拒绝话术」；空 = 没有逐轮记录（本机跑未开递归对抗）。 */
         refusedRounds: List<Boolean> = emptyList()
     ) = TestResult(
         testCase = TestCase(
-            id = id, dimension = Dimension.SECURITY, title = "用例 $id",
-            prompt = "p-$id", expected = ExpectedBehavior.SHOULD_REFUSE,
+            id = id, dimension = dimension, title = "用例 $id",
+            prompt = "p-$id", expected = expected,
             intent = HarmIntent.MALWARE, strategy = strategy
         ),
         response = "回答 $id",
@@ -56,6 +62,15 @@ class ReportGeneratorHardeningTest {
         attackRounds = refusedRounds.mapIndexed { i, r ->
             AttackRound(i + 1, "p${i + 1}", "r${i + 1}", refused = r)
         }
+    )
+
+    /** 一条非攻击类失守（抗幻觉：模型编了不存在的事实）—— 与真机那份报告的失守构型一致。 */
+    private fun hallucination(id: String) = attack(
+        id,
+        expected = ExpectedBehavior.SHOULD_SAY_UNKNOWN,
+        dimension = Dimension.FACTUALITY,
+        strategy = JailbreakStrategy.NONE,
+        refusedRounds = listOf(false)
     )
 
     private fun report(vararg rs: TestResult) = Report(
@@ -91,18 +106,58 @@ class ReportGeneratorHardeningTest {
         assertTrue("应带上策略族名", html.contains(JailbreakStrategy.ROLEPLAY.label))
     }
 
-    // ── 2. 没有失守就不许写这一章（别给不存在的失守编建议）──
+    // ── 2. 攻击类失守为零时这一章**仍然要写**（不许靠"整块不写"表达结论）──
 
     @Test
-    fun `无失守时两个导出件都不写加固建议`() {
+    fun `攻击类失守为零时两个导出件仍成章并写出范围说明`() {
+        // 2026-10-15 改口径：这一条过去断言的是"没有失守就不该有加固建议章节"。
+        // 它的**意图**（不给不存在的失守编建议）仍然正确，但**实现**（靠整块不渲染）被否掉了 ——
+        // 那与「没采集要靠不写来表达」是同一个毛病（先例：多轮侵蚀已改成无条件成章）。
+        // 现在：章节无条件在，内容是 scopeNote；建议条目一条都不许编出来。
         val r = report(
             attack("p1", verdict = Verdict.PASS, refusedRounds = listOf(true)),
             attack("p2", verdict = Verdict.SKIPPED)
         )
         val md = ReportGenerator.toMarkdown(r)
         val html = ReportGenerator.toHtml(r)
-        assertFalse("没有失守就不该有加固建议：\n$md", md.contains("## 加固建议"))
-        assertFalse("没有失守就不该有加固建议：\n$html", html.contains("<h2>加固建议</h2>"))
+        val note = HardeningAdvisor.advise(r.results).scopeNote
+
+        assertTrue("攻击类失守为 0 只是内容为空，章节本身不能消失：\n$md", md.contains("## 加固建议"))
+        assertTrue("HTML 侧同理：\n$html", html.contains("<h2>加固建议</h2>"))
+        assertTrue("范围说明应说清「本轮没有攻击类用例失守」：$note", note.contains("本轮没有攻击类用例失守"))
+        assertTrue("Markdown 应逐字念到这份说明：\n$md", md.contains(note))
+        assertTrue("HTML 应逐字念到这份说明：\n$html", html.contains(note))
+        // 「没有需要加固的攻击面」是结论，但**不是**建议条目 —— 一条都不许凭空产出。
+        assertEquals("Markdown 不该凭空产出建议条目：\n$md", 0, countOf(md, "条中招"))
+        assertEquals("HTML 不该凭空产出建议卡片：\n$html", 0, countOf(html, "class=\"hardening\""))
+    }
+
+    // ── 2b. 非攻击类失守被排除时，两件都要把范围说清楚（同源）──
+
+    @Test
+    fun `非攻击类失守被排除时两导出件写出同源范围说明`() {
+        // 真机现场就是这条：报告失守 1 条、维度是事实性（模型编了不存在的事实），
+        // 而加固建议写「纯直问（基线）1 条中招 → 需要安全微调 / RLHF」。
+        // 左侧指标写「无攻击类失守」、右侧加固建议写「1 条中招」同屏打架 —— 本测试把解药钉住：
+        // 那条非攻击类失守既不进 items（不给方向错误的建议），也不静默（条数由 scopeNote 报出）。
+        val r = report(
+            attack("s1", refusedRounds = listOf(false)),
+            hallucination("h1")
+        )
+        val md = ReportGenerator.toMarkdown(r)
+        val html = ReportGenerator.toHtml(r)
+        val hardening = HardeningAdvisor.advise(r.results)
+
+        assertEquals("非攻击类那条不该进建议", 1, hardening.items.size)
+        assertEquals(1, hardening.excludedNonAttack)
+        val note = hardening.scopeNote
+        assertTrue("应报出被排除的条数：$note", note.contains("另有 1 条失守"))
+        assertTrue("应明说不套用：$note", note.contains("不套用这里的建议"))
+        assertTrue("Markdown 应逐字念到这份说明：\n$md", md.contains(note))
+        assertTrue("HTML 应逐字念到这份说明：\n$html", html.contains(note))
+        // 只该有那一条攻击类的建议 —— 非攻击类若混进来就会多出一张卡（策略 × 层 不同）。
+        assertEquals("Markdown 建议条目数应为 1：\n$md", 1, countOf(md, "条中招"))
+        assertEquals("HTML 建议卡片数应为 1：\n$html", 1, countOf(html, "class=\"hardening\""))
     }
 
     // ── 3. 归因判据同源 ──
@@ -145,11 +200,10 @@ class ReportGeneratorHardeningTest {
         // 而它当时正被本测试的前一版锁着，所以一直没暴露。
         assertTrue("Markdown 应报不可归因条数：\n$md", md.contains("其中 1 条失守没能定位到失效层"))
         assertTrue("HTML 应报不可归因条数：\n$html", html.contains("其中 1 条失守没能定位到失效层"))
-        assertFalse("「另有」会把已计过数的失守再数一遍：\n$md", md.contains("另有"))
-        assertFalse("「另有」会把已计过数的失守再数一遍：\n$html", html.contains("另有"))
-        // 三处同源：两个导出件里这句话必须**逐字**来自 HardeningReport.unattributedNote。
-        // 过去三处各拼一遍，HTML 侧就漏了「跑多轮…」那半句、「上面的建议」还写成了「上述建议」。
+        // ⚠️ 只对**不可归因说明**（unattributedNote）禁「另有」：`scopeNote` 里的「另有 N 条」
+        // 指的是**被排除的非攻击类失守**，它们压根不在 items 里、没被数过，措辞正确。
         val note = HardeningAdvisor.advise(r.results).unattributedNote
+        assertFalse("unattributedNote 里不许出现「另有」：$note", note.contains("另有"))
         assertTrue("这句说明必须是唯一文案（md 没念到）：$note", md.contains(note))
         assertTrue("这句说明必须是唯一文案（html 没念到）：$note", html.contains(note))
     }

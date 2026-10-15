@@ -57,7 +57,7 @@
 | 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`RecursiveAdversarialAttackTest`（3 条，接线）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（22 项，含 `run_recursive` 接线） |
 | 3.3 | **侵蚀曲线 & `breakRound`**：`core/report/ErosionCurve.kt`（纯口径层）+ `ui/chart/ErosionTrack.kt` + `ChartSvg.erosionCumulative`；报告页 / Markdown / HTML 三处同源 | `ErosionCurveTest`（20 条）+ 真机报告页 |
 | 4.2 | **新指标面板**：`core/report/SafetyMetrics.kt` —— 方案 §5 六项 + 策略×意图矩阵（`asrColor` 独立于置信度色阶）；报告页 `MetricsPanel` + 默认收起矩阵，两处导出同源 | `SafetyMetricsTest`（23 条）+ `ReportChartTest`「ASR热力色不能用置信度色阶」 |
-| 3.5 | **加固建议**：`core/report/HardeningAdvisor.kt` + `core/report/DefenseAttribution.kt`（归因判据**全项目唯一实现**）。**纯规则映射表，不是 LLM 现场生成** —— 8 个策略族一个不落；按「策略族 × 先失效层」聚合、按中招条数降序；定位不出层的仍给策略级建议并单列 `unattributed`。报告页 / Markdown / HTML 三处同源 | `HardeningAdvisorTest`（10 条）+ `ReportGeneratorHardeningTest`（6 条，专钉导出侧接线） |
+| 3.5 | **加固建议**：`core/report/HardeningAdvisor.kt` + `core/report/DefenseAttribution.kt`（归因判据**全项目唯一实现**）。**纯规则映射表，不是 LLM 现场生成** —— 15 个策略族一个不落；按「策略族 × 先失效层」聚合、按中招条数降序；定位不出层的仍给策略级建议并单列 `unattributed`。**范围只到攻击类用例**（`expected == SHOULD_REFUSE`），非攻击类失守走 `excludedNonAttack` + `scopeNote` 显式报出（2026-10-15 修，见下方隐患）；**章节无条件成章**。报告页 / Markdown / HTML 三处同源 | `HardeningAdvisorTest`（15 条）+ `ReportGeneratorHardeningTest`（7 条，专钉导出侧接线） |
 | 4.1 | **取证报告**：四维报告 + 4 张图 + 策略×意图矩阵 + 破防步数 + 失效层归因 + 加固建议，报告页 / Markdown / HTML 三处同源 | 验收「一份报告能回答**为什么破 / 第几轮破 / 怎么修**」**已达成**（3.3 + 3.4 + 3.5 齐备） |
 
 **能力升级批次（借 FuzzyAI / Heretic，逐项设计与证据见 `docs/参考项目-能力升级路线.md`）**
@@ -83,18 +83,37 @@
 （4.4 的**前置**——B4 外部裁判的接入形状——已就位，见上表；**真接 2~3 家外部 API 仍未做**，
 要 key 与配额。形状 ≠ 外部效度，别混）。
 
-> ⚠️ **3.5 加固建议会吃非攻击类失守、并给出错方向的建议（2026-10-15 真机验收发现，未修）**：
-> `HardeningAdvisor.advise()` 的输入是 `ReportSections.fails`（**全维度**真失守），
+> ✅ **3.5 加固建议吃非攻击类失守、给出错方向建议 —— 已修（2026-10-15 真机验收发现 → 当场修 + 真机复核）**
+>
+> **症状**：`HardeningAdvisor.advise()` 的输入是 `ReportSections.fails`（**全维度**真失守），
 > 而它按 `testCase.strategy` 聚合、给的是「攻击手法 × 先失效护栏层」方向的建议。
-> 于是抗幻觉 / 逻辑一致性 / 鲁棒性维度的失守（`strategy` 默认 `NONE`）会被归进「纯直问（基线）」，
-> 拿到「直问即失守，说明基础安全对齐不足…需要安全微调 / RLHF」——
-> **对「模型编造了不存在的事实」这类失守完全不适用**。真机上它与安全指标同屏：
-> 左边「无攻击类失守」、右边「纯直问（基线）1 条中招」（同一次验收还修掉了
-> 「先失效的护栏层」写「无失守案例」与摘要「失守 1 条」打架的问题，那处取值的分母是攻击类）。
-> 三条候选修法 ——① 只吃攻击类（口径与失效层一致，但章节可能整块消失，违反「不能靠不写来表达」）；
-> ② 按维度分流给各自建议（完整，但要**编**文案，本项目纪律是"不编"）；
-> ③ 只吃攻击类 + 章节无条件成章 + 显式报出未覆盖的非攻击类条数（倾向这条）——
-> **待定**：它要新增用户可见文案，且涉及「非攻击类失守该不该有建议」的产品判断。
+> 于是抗幻觉 / 逻辑一致性 / 鲁棒性维度的失守（`strategy` 反序列化后一律落 `NONE`）
+> 被归进「纯直问（基线）」，拿到「直问即失守，说明基础安全对齐不足…需要安全微调 / RLHF」——
+> **对「模型编造了不存在的事实」这类失守方向完全不对**。真机上它与安全指标同屏：
+> 左边「无攻击类失守」、右边「纯直问（基线）1 条中招」。（同一次验收还修掉了
+> 「先失效的护栏层」写「无失守案例」与摘要「失守 1 条」打架的问题，那处取值的分母是攻击类。）
+>
+> **候选修法（当时列的三条，留下决策痕迹）**：
+> ① 只吃攻击类 —— 口径与失效层一致，但章节会整块消失，违反「不能靠不写来表达」；
+> ② 按维度分流给各自建议 —— 完整，但要**编**文案，违反本项目"不编"的纪律；
+> ③ 只吃攻击类 + 章节无条件成章 + 显式报出未覆盖的非攻击类条数 ← **采用这条**。
+>
+> **落地（③）**：`advise()` 内部两道过滤 —— 先只留 `Verdict.FAIL`，再只留**攻击类**
+> （`expected == SHOULD_REFUSE`）；被排除的条数走 `HardeningReport.excludedNonAttack`，
+> 由 `scopeNote`（**唯一源**，报告页 / Markdown / HTML 三处同源）显式说出
+> 「另有 N 条失守属于非攻击类维度…不套用这里的建议」。
+> 同时这一章**改成无条件成章** —— 攻击类失守 0 条时改写出「本轮没有攻击类用例失守」，
+> 因为**"本节没有东西"本身就是结论**（先例：多轮侵蚀已改成无条件成章）。
+>
+> **单测**：`HardeningAdvisorTest` 15 条 + `ReportGeneratorHardeningTest` 7 条。
+> 其中 `ReportGeneratorHardeningTest` 里**有一条旧口径断言被专门改掉** ——
+> 它曾把"没有失守就两件都不写这一章"钉死，所以新口径一上来就红。
+> 教训：**断言钉的应是正确语义，不是当时的实现**（该测试的意图仍然对，错的是实现方式）。
+>
+> **真机复核**：那份真实报告（2026-10-13 15:08，50 条 / 失守 1 条 / 攻击类 0 条 / factuality）——
+> 「加固建议」章节在，内容只有 scopeNote「本轮没有攻击类用例失守。另有 1 条失守属于非攻击类维度…」，
+> 且**无任何建议卡片**；同屏上方是新口径的「先失效的护栏层 = 无攻击类失守」，再往下是
+> 用例热力图里那格红色（正是被排除的那条 factuality 失守）—— 三处互相印证。
 
 > ⚠️ **2.1 只交付了「打分器」，还没接进数据流**：`RefusalScorer` 目前被
 > `ResponseContext.isRefusal` 使用（即拒绝/半妥协的分层），但

@@ -106,8 +106,10 @@ object ReportGenerator {
         // 与上面「安全指标」的失效层是**同一份实现**，避免两处对同一条用例给出相反归因。
         // ⚠️ 它刻意**不是** LLM 现场生成的：建议必须可复现、可证伪，否则取证报告没有可信度。
         val hardening = HardeningAdvisor.advise(sections.fails)
+        // ⚠️ 无条件成章（2026-10-15 真机验收改，与报告页同）：攻击类失守 0 条时，
+        // 「本轮没有需要加固的攻击面」本身就是结论，**不能靠"整块不写"来表达**。
+        append("## 加固建议\n\n")
         if (!hardening.isEmpty) {
-            append("## 加固建议\n\n")
             append("按「攻击手法 × 先失效的护栏层」聚合，**按中招条数降序** —— 第一条就是该先修的。\n\n")
             hardening.items.forEach { item ->
                 append("### ${item.strategy.label}（${item.cases} 条中招")
@@ -116,12 +118,15 @@ object ReportGenerator {
                 append("${item.action}\n\n")
                 item.snippet?.let { append("可直接粘进系统提示：\n\n> $it\n\n") }
             }
-            // 文案唯一源：HardeningReport.unattributedNote —— 报告页 / Markdown / HTML 三处同源。
-            // 这里过去自己拼过一遍，结果三处走岔：HTML 侧漏了「跑多轮…」那半句，
-            // 而且三处都把「其中」写成了「另有」（那份报告失守 1 条，读起来像 2 条）。
-            if (hardening.unattributedNote.isNotEmpty()) {
-                append("> ${hardening.unattributedNote}\n\n")
-            }
+        }
+        // 本节范围说明（唯一源 = HardeningReport.scopeNote，报告页 / Markdown / HTML 三处同源）：
+        // 攻击类失守 0 条时它是本节唯一内容；有非攻击类失守被排除时报条数 + 说明不套用。
+        if (hardening.scopeNote.isNotEmpty()) append("> ${hardening.scopeNote}\n\n")
+        // 文案唯一源：HardeningReport.unattributedNote —— 报告页 / Markdown / HTML 三处同源。
+        // 这里过去自己拼过一遍，结果三处走岔：HTML 侧漏了「跑多轮…」那半句，
+        // 而且三处都把「其中」写成了「另有」（那份报告失守 1 条，读起来像 2 条）。
+        if (hardening.unattributedNote.isNotEmpty()) {
+            append("> ${hardening.unattributedNote}\n\n")
         }
 
         // ── 基线对比章节（选了基线才有）──
@@ -413,9 +418,10 @@ object ReportGenerator {
         }
 
         // ── 加固建议（方案 §3.5）：与报告页 / Markdown 同源（HardeningAdvisor）──
+        // ⚠️ 无条件成章（同 Markdown 侧）：攻击类失守 0 条时也要写出来。
         val hardening = HardeningAdvisor.advise(sections.fails)
+        append("<h2>加固建议</h2>")
         if (!hardening.isEmpty) {
-            append("<h2>加固建议</h2>")
             append("<p class=\"meta\">按「攻击手法 × 先失效的护栏层」聚合，按中招条数降序 —— 第一条就是该先修的。</p>")
             hardening.items.forEach { item ->
                 append("<div class=\"hardening\"><b>${escapeHtml(item.strategy.label)}</b>")
@@ -429,10 +435,14 @@ object ReportGenerator {
                 }
                 append("</div>")
             }
-            // 文案唯一源：HardeningReport.unattributedNote（注释同上）。
-            if (hardening.unattributedNote.isNotEmpty()) {
-                append("<p class=\"meta\">${escapeHtml(hardening.unattributedNote)}</p>")
-            }
+        }
+        // 本节范围说明（唯一源 = HardeningReport.scopeNote，三处同源）。
+        if (hardening.scopeNote.isNotEmpty()) {
+            append("<p class=\"meta\">${escapeHtml(hardening.scopeNote)}</p>")
+        }
+        // 文案唯一源：HardeningReport.unattributedNote（注释同上）。
+        if (hardening.unattributedNote.isNotEmpty()) {
+            append("<p class=\"meta\">${escapeHtml(hardening.unattributedNote)}</p>")
         }
 
         // ── 图表：内联 SVG，不依赖 JS / CDN ──

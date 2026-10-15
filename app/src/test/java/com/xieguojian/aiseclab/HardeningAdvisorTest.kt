@@ -23,11 +23,14 @@ import org.junit.Test
  * 加固建议（方案 §3.5）回归。
  *
  * 这块最怕的不是"算错数"，而是**给出不可复现、不可证伪的建议**（所以它必须是纯规则映射表，
- * 不是让模型现场编）。测试盯四件事：
+ * 不是让模型现场编）。测试盯五件事：
  *   1. 聚合口径：同策略同层要合并、同策略不同层不能合并（修法本来就不同）；
  *   2. 不可归因的用例（没有逐轮记录）仍要拿到**策略级**建议，且单列计数，不许塞进任何一层；
  *   3. 排序按中招条数降序 —— 第一条就是该先修的；
- *   4. 建议文本里**不许出现 Markdown 标记**（Compose 与导出都不解析，`**` 会原样显示成星号）。
+ *   4. 建议文本里**不许出现 Markdown 标记**（Compose 与导出都不解析，`**` 会原样显示成星号）；
+ *   5. **范围**：只对攻击类（`expected == SHOULD_REFUSE`）出建议；非攻击类失守既不进 items、
+ *      也不许静默吞掉 —— 条数由 `excludedNonAttack` 报出，说明由 `scopeNote` 说出来
+ *      （2026-10-15 真机验收改，见 [HardeningAdvisor.HardeningReport.excludedNonAttack]）。
  */
 class HardeningAdvisorTest {
 
@@ -36,12 +39,15 @@ class HardeningAdvisorTest {
         verdict: Verdict = Verdict.FAIL,
         strategy: JailbreakStrategy = JailbreakStrategy.ROLEPLAY,
         intent: HarmIntent = HarmIntent.MALWARE,
+        /** 期望行为。默认攻击类（安全维度）；非攻击类维度传别的值。 */
+        expected: ExpectedBehavior = ExpectedBehavior.SHOULD_REFUSE,
+        dimension: Dimension = Dimension.SECURITY,
         /** 逐轮「有没有拒绝话术」；空 = 没有逐轮记录（本机跑未开递归对抗）。 */
         refusedRounds: List<Boolean> = emptyList()
     ) = TestResult(
         testCase = TestCase(
-            id = id, dimension = Dimension.SECURITY, title = "用例 $id",
-            prompt = "p-$id", expected = ExpectedBehavior.SHOULD_REFUSE,
+            id = id, dimension = dimension, title = "用例 $id",
+            prompt = "p-$id", expected = expected,
             intent = intent, strategy = strategy
         ),
         response = "回答 $id",
@@ -55,12 +61,28 @@ class HardeningAdvisorTest {
         }
     )
 
+    /**
+     * 一条**非攻击类**失守：抗幻觉维度、模型编了不存在的事实。
+     *
+     * 这正是 2026-10-15 真机现场那份报告的失守构成（`expected = SHOULD_SAY_UNKNOWN` /
+     * `dimension = factuality`）。它的 `strategy` 反序列化后落在 `NONE`，所以修复前
+     * 会被归进「纯直问（基线）」并拿到「需要安全微调 / RLHF」—— 方向完全不对。
+     */
+    private fun hallucination(id: String) = attack(
+        id,
+        expected = ExpectedBehavior.SHOULD_SAY_UNKNOWN,
+        dimension = Dimension.FACTUALITY,
+        strategy = JailbreakStrategy.NONE,
+        refusedRounds = listOf(false)   // 有逐轮记录也没用：它压根不该进这一节
+    )
+
     @Test
     fun 没有失守时不给任何建议() {
         val r = HardeningAdvisor.advise(emptyList())
         assertTrue(r.isEmpty)
         assertEquals(0, r.covered)
         assertEquals(0, r.unattributed)
+        assertEquals(0, r.excludedNonAttack)
     }
 
     @Test
@@ -73,6 +95,8 @@ class HardeningAdvisorTest {
             )
         )
         assertTrue("只有 FAIL 才出建议，实际 = $r", r.isEmpty)
+        // 没失守 = 没有被排除的：这个计数不能被"非 FAIL"顶上去
+        assertEquals(0, r.excludedNonAttack)
     }
 
     @Test
@@ -230,5 +254,72 @@ class HardeningAdvisorTest {
         val r = HardeningAdvisor.advise(listOf(attack("a1", refusedRounds = listOf(false))))
         assertEquals(0, r.unattributed)
         assertEquals("", r.unattributedNote)
+    }
+
+    // ── 范围：只对攻击类用例出建议（2026-10-15 真机验收改）──────────────────
+
+    @Test
+    fun 非攻击类失守不出建议但要把条数报出来() {
+        // 真机现场：报告失守 1 条（expected = SHOULD_SAY_UNKNOWN / 事实性 —— 模型编了不存在的事实），
+        // 加固建议却写「纯直问（基线）1 条中招 → 需要安全微调 / RLHF」。
+        // 对「编事实」这条建议**方向完全不对**：报告里给出一条方向错误的加固建议，
+        // 比不给建议更糟 —— 有人会照着做。所以它们不进本节，但**也不能静默吞掉**。
+        val r = HardeningAdvisor.advise(listOf(hallucination("h1"), hallucination("h2")))
+        assertTrue("非攻击类失守不该拿到「攻击手法」方向的建议：$r", r.items.isEmpty())
+        assertEquals(0, r.covered)
+        assertEquals(2, r.excludedNonAttack)
+        val note = r.scopeNote
+        assertTrue("被排除的条数必须说出来，不能静默：$note", note.contains("另有 2 条失守属于非攻击类维度"))
+        assertTrue("并要说清为什么不套用：$note", note.contains("不套用这里的建议"))
+    }
+
+    @Test
+    fun 混合失守时非攻击类那条不会挤进攻击类建议里() {
+        // 一条攻击类（ROLEPLAY，一步就破）+ 一条非攻击类。修复前后者会被归进「纯直问（基线）」，
+        // 于是 items 里会冒出 JailbreakStrategy.NONE —— 这就是真机上读到的那个矛盾。
+        val r = HardeningAdvisor.advise(
+            listOf(
+                attack("a1", refusedRounds = listOf(false)),
+                hallucination("h1")
+            )
+        )
+        assertEquals(1, r.items.size)
+        assertEquals(JailbreakStrategy.ROLEPLAY, r.items.single().strategy)
+        assertFalse(
+            "非攻击类失守不该被套上「纯直问（基线）」：${r.items.map { it.strategy }}",
+            r.items.any { it.strategy == JailbreakStrategy.NONE }
+        )
+        assertEquals(1, r.covered)
+        assertEquals("被排除的那条只算一次、且不重复计入 covered", 1, r.excludedNonAttack)
+    }
+
+    @Test
+    fun 范围说明的三种情形() {
+        // 情形 1：有建议、没有被排除 → 空串（没什么要解释的）
+        val onlyAttack = HardeningAdvisor.advise(listOf(attack("a1", refusedRounds = listOf(false))))
+        assertTrue(onlyAttack.items.isNotEmpty())
+        assertEquals(0, onlyAttack.excludedNonAttack)
+        assertEquals("没有被排除的就不该有范围说明", "", onlyAttack.scopeNote)
+
+        // 情形 2：有建议 + 有被排除 → 报条数 + 明说方向不同、不套用
+        val mixed = HardeningAdvisor.advise(
+            listOf(attack("a1", refusedRounds = listOf(false)), hallucination("h1"))
+        )
+        assertTrue(mixed.items.isNotEmpty())
+        assertEquals(1, mixed.excludedNonAttack)
+        assertTrue("应报条数：${mixed.scopeNote}", mixed.scopeNote.contains("另有 1 条失守"))
+        assertTrue("应明说不套用：${mixed.scopeNote}", mixed.scopeNote.contains("不套用这里的建议"))
+
+        // 情形 3：攻击类失守 0 条 —— 「本节没有东西」本身就是结论，**不能靠"整块不渲染"表达**
+        val noneAttack = HardeningAdvisor.advise(listOf(hallucination("h1")))
+        assertTrue(noneAttack.items.isEmpty())
+        assertTrue("攻击类 0 条也要有结论：${noneAttack.scopeNote}", noneAttack.scopeNote.contains("本轮没有攻击类用例失守"))
+        assertTrue("并带上被排除的条数：${noneAttack.scopeNote}", noneAttack.scopeNote.contains("另有 1 条失守"))
+
+        // 情形 3'：连非攻击类失守都没有 → 纯"没有需要加固的攻击面"
+        val nothing = HardeningAdvisor.advise(emptyList())
+        assertTrue(nothing.items.isEmpty())
+        assertEquals(0, nothing.excludedNonAttack)
+        assertEquals("本轮没有攻击类用例失守 —— 没有需要加固的攻击面。", nothing.scopeNote)
     }
 }
