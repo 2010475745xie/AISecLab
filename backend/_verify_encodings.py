@@ -91,7 +91,7 @@ check("  且它们全部落在 U+E0000–U+E007F", all(0xE0000 <= ord(c) <= 0xE0
 # ── 4) 变体集：编码族 20 条，还原后命中 overwrite 指纹（1.2 验收本身）────
 print("\n== 4) 变体集：编码族 20 条还原后必须命中 overwrite 指纹 ==")
 cases = C.build_cases()
-check("变体集总量", len(cases), 100)
+check("变体集总量", len(cases), 200)
 enc_cases = [c for c in cases if c.encoded]
 check("编码族条数", len(enc_cases), 20)
 kind_counts: dict[str, int] = {}

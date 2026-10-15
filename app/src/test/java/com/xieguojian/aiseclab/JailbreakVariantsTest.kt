@@ -45,16 +45,16 @@ class JailbreakVariantsTest {
     // ── 规模与结构 ────────────────────────────────────────────────────
 
     @Test
-    fun `变体集正好100条且每个策略族各20条`() {
-        assertEquals("变体集总量不对", 100, variants.size)
+    fun `变体集正好200条且每个策略族各20条`() {
+        assertEquals("变体集总量不对", 200, variants.size)
         JailbreakCases.STRATEGIES.forEach { s ->
             assertEquals(
                 "策略族 ${s.id} 的条数不是 20（策略 × 意图矩阵会因此不平衡）",
                 20, variants.count { it.strategy == s }
             )
         }
-        // 5 类 × 20 = 100，两处数字必须自洽，否则"100 条"是碰巧凑出来的
-        assertEquals(100, JailbreakCases.STRATEGIES.size * JailbreakCases.GOALS.size)
+        // 10 类 × 20 = 200，两处数字必须自洽，否则"200 条"是碰巧凑出来的
+        assertEquals(200, JailbreakCases.STRATEGIES.size * JailbreakCases.GOALS.size)
     }
 
     @Test
@@ -83,7 +83,7 @@ class JailbreakVariantsTest {
         assertEquals("默认基线集被改了 —— 变体集必须是**额外**的一批，不能替换掉回归基线", 50, base.size)
         assertTrue("默认基线里混进了变体用例", base.none { it.id.startsWith("jbv-") })
         assertEquals("安全维度基线条数变了", 18, SecurityModule().buildCases().size)
-        assertEquals("变体集模块条数不是 100", 100, JailbreakVariantsModule().buildCases().size)
+        assertEquals("变体集模块条数不是 200", 200, JailbreakVariantsModule().buildCases().size)
     }
 
     // ── 1.3 意图标签 ──────────────────────────────────────────────────
@@ -117,20 +117,20 @@ class JailbreakVariantsTest {
     }
 
     @Test
-    fun `全量150条用例都带结构化意图与策略字段`() {
+    fun `全量250条用例都带结构化意图与策略字段`() {
         val all = listOf(
             SecurityModule(), ConsistencyModule(), FactualityModule(), RobustnessModule(),
             JailbreakVariantsModule()
         ).flatMap { it.buildCases() }
-        assertEquals("全量条数不对（50 基线 + 100 变体）", 150, all.size)
+        assertEquals("全量条数不对（50 基线 + 200 变体）", 250, all.size)
         // 字段必须显式存在、可空值域之外 —— 缺省值只在"旧数据反序列化"时才是合法的
         all.forEach {
             assertNotNull("${it.id} 的 intent 字段缺失", it.intent)
             assertNotNull("${it.id} 的 strategy 字段缺失", it.strategy)
         }
-        // 有害用例（安全维度 18 + 变体 100）必须全部有具体意图，不允许 unknown
+        // 有害用例（安全维度 18 + 变体 200）必须全部有具体意图，不允许 unknown
         val harmful = all.filter { it.expected == ExpectedBehavior.SHOULD_REFUSE }
-        assertEquals("有害用例条数不对（18 基线 + 100 变体）", 118, harmful.size)
+        assertEquals("有害用例条数不对（18 基线 + 200 变体）", 218, harmful.size)
         val unclassified = harmful.filter { it.intent == HarmIntent.UNKNOWN }
         assertTrue("这些有害用例没有归类意图：${unclassified.map { it.id }}", unclassified.isEmpty())
     }

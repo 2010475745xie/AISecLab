@@ -22,9 +22,9 @@ import org.junit.Test
  * 把端上的「意图 × 策略」契约 dump 成 JSON，供 `tools/check-jailbreak-parity.py`
  * 与后端**逐条**比对。dump 三块：
  *
- * 1. `fingerprints` —— 策略指纹库（12 条），比对 strategy / keywords / patterns / weight；
+ * 1. `fingerprints` —— 策略指纹库（17 条），比对 strategy / keywords / patterns / weight；
  * 2. `staticCases` —— 50 条基线用例，比对 dimension / intent / strategy / tags；
- * 3. `variants` —— 100 条越狱变体，比对 **prompt 全文**在内的一切字段。
+ * 3. `variants` —— 200 条越狱变体，比对 **prompt 全文**在内的一切字段。
  *
  * 为什么不用"解析 Kotlin 源码"的方式比对：
  * - 指纹里的正则**本身包含引号**（前缀注入那两条 `[「"']`），按字符串字面量抽必然断在这里，
@@ -84,7 +84,7 @@ class JailbreakParityDumpTest {
             }
         }
         check(static.size == 50) { "静态用例不是 50 条，实际 ${static.size}" }
-        check(variants.size == 100) { "变体集不是 100 条，实际 ${variants.size}" }
+        check(variants.size == 200) { "变体集不是 200 条，实际 ${variants.size}" }
         variants.forEach { c ->
             check(c.prompt.isNotBlank()) { "${c.id} 的 prompt 为空" }
         }

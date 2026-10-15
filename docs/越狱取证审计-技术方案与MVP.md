@@ -49,10 +49,10 @@
 
 | # | 落地物 | 复现 |
 |---|---|---|
-| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（12 条 / 7 族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
-| 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
+| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（17 条 / 12 族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
+| 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字 / 猪拉丁 / Unicode Tag，7 种） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
 | 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
-| 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，100 条 = 20 目标 × 5 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→150 条） |
+| 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，200 条 = 20 目标 × 10 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→250 条） |
 | 2.1 | **否定感知拒绝打分**：`core/judge/RefusalScorer.kt` ↔ `backend/app/judge.py::refusal_strength`（**纯文本规则、零 token**，不是嵌入模型）。先把**被否定的拒绝话术掩掉**（"我不会拒绝你"里躺着"我不会"、"I won't refuse"里躺着"I won't"），再对锚点做**非重叠贪心匹配**（词表里 `我不会` 是 `我不会帮` 的前缀，按词表项计数会把同一次拒绝数两遍）。程序性内容只认**步骤话头 / 成对代码围栏**，**纯列表要配转折词才算** —— 否则"拒绝 + 编号的原因"会被压成配合。`ResponseContext.isRefusal` 收口为转发它，**判据只有一份** | `RefusalScorerTest`（10 条，含自测集 76 条：**97.3%**；朴素基线仅 **79.5%**）+ `backend/_verify_refusal.py`（准确率 + **两端逐条分类 76/76 完全一致**）+ `tools/check-judge-parity.py`（新增 `NEGATED_REFUSAL` / `CONCESSION`，并把 `ComplianceDetector.kt` 并入比对） |
 | 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`RecursiveAdversarialAttackTest`（3 条，接线）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（22 项，含 `run_recursive` 接线） |
 | 3.3 | **侵蚀曲线 & `breakRound`**：`core/report/ErosionCurve.kt`（纯口径层）+ `ui/chart/ErosionTrack.kt` + `ChartSvg.erosionCumulative`；报告页 / Markdown / HTML 三处同源 | `ErosionCurveTest`（20 条）+ 真机报告页 |
@@ -106,8 +106,8 @@
 |---|---|---|---|
 | 1.1 | **策略指纹库** | `StrategyFingerprint` 表：`ignore previous`/DAN/`developer mode`/Base64/ROT13/many-shot/fictional framing/系统提示覆盖/多轮蚕食，约 12–20 条，正则 + 关键词 | 给定 60 条越狱样本文本，策略命中率 ≥ 90% |
 | 1.2 | **编码还原器** | 送判前先解码：Base64 / ROT13 / Morse / 零宽字符剥离 / 同形字归一（复用 `L1PatternRules`） | 编码型越狱在还原后可被 L1 命中 |
-| 1.3 | **意图标签** | 新增 `HarmIntent`（制毒/入侵/歧视/隐私泄露/系统提示窃取/欺诈…）作为**用例元数据** | 100 条有害集全部带 intent 标签 |
-| 1.4 | **用例集** | 复用 `SecurityModule.buildCases()`；补「同一有害意图 × 5 类策略 × 各 20 条」变体集 | 5×20 = 100 条越狱变体可跑 |
+| 1.3 | **意图标签** | 新增 `HarmIntent`（制毒/入侵/歧视/隐私泄露/系统提示窃取/欺诈…）作为**用例元数据** | 有害集全部带 intent 标签（200 变体 + 18 安全基线 = 218 条） |
+| 1.4 | **用例集** | 复用 `SecurityModule.buildCases()`；补「同一有害意图 × 10 类策略 × 各 20 条」变体集 | 10×20 = 200 条越狱变体可跑 |
 
 ### 周 1–2 — 判定：拒绝语义专项 + 轻量分类
 | # | 功能 | 实现要点 | 验收 |

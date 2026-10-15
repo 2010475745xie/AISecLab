@@ -49,6 +49,16 @@ enum class JailbreakStrategy(val id: String, val label: String) {
     @SerialName("fiction") FICTIONAL_FRAMING("fiction", "虚构情境"),
     @SerialName("tool_inject") TOOL_INJECTION("tool_inject", "工具返回注入"),
     @SerialName("refusal_suppress") REFUSAL_SUPPRESSION("refusal_suppress", "拒绝抑制/前缀注入"),
+    // ── 说服 / 社会工程（A2，2026-10-15 补）─────────────────────────────
+    // 借自 FuzzyAI 的 `per` / `tax` / `hst` / `exp` / `wrd` 五族。**收它们的理由是方向不同**：
+    // 上面那批（overwrite / encoding / fiction…）是**对抗性指令**——把规则当作要被推翻的对象；
+    // 这五族是**哄骗**——不否认规则，而是让模型觉得"这次应该给"。
+    // 现代模型栽在后者上的比栽在前者上的多（参考件 FuzzyAI §6）。
+    @SerialName("persuasion") PERSUASION("persuasion", "说服改写"),
+    @SerialName("taxonomy") TAXONOMY("taxonomy", "说服分类学"),
+    @SerialName("history_framing") HISTORY_FRAMING("history_framing", "历史学术包装"),
+    @SerialName("thought_experiment") THOUGHT_EXPERIMENT("thought_experiment", "思维实验"),
+    @SerialName("word_game") WORD_GAME("word_game", "游戏化"),
     @SerialName("none") NONE("none", "纯直问（基线）");
 
     companion object {

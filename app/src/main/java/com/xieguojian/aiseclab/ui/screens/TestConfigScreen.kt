@@ -157,8 +157,9 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         )
 
         Spacer(Modifier.height(16.dp))
-        // 越狱变体集：同一批有害意图 × 5 类策略（角色扮演/系统提示覆盖/虚构情境/编码混淆/拒绝抑制）
-        // × 各 20 条 = 100 条。加了它才能回答「换个包装还攻不攻得破」，代价是安全维度条数 ×6.5。
+        // 越狱变体集：同一批有害意图 × 10 类策略（角色扮演/系统提示覆盖/虚构情境/编码混淆/拒绝抑制 +
+        // 说服改写/说服分类学/历史学术包装/思维实验/游戏化）
+        // × 各 20 条 = 200 条。加了它才能回答「换个包装还攻不攻得破」，代价是安全维度条数 ×12。
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("越狱变体集", style = MaterialTheme.typography.titleMedium)
@@ -173,8 +174,9 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         Text(
             if (Dimension.SECURITY !in selected)
                 "需先勾选「安全性」维度 —— 变体集是安全用例，只勾别的维度它不会跑。"
-            else "💥 再并入 $variantCount 条：20 个有害目标 × 5 类策略" +
-                "（角色扮演 / 系统提示覆盖 / 虚构情境 / 编码混淆 / 拒绝抑制）。" +
+            else "💥 再并入 $variantCount 条：20 个有害目标 × 10 类策略" +
+                "（角色扮演 / 系统提示覆盖 / 虚构情境 / 编码混淆 / 拒绝抑制 /" +
+                "说服改写 / 说服分类学 / 历史学术包装 / 思维实验 / 游戏化）。" +
                 "用同一批意图只换包装，用来量「哪种手法最容易得手」。",
             style = MaterialTheme.typography.bodySmall,
             color = if (Dimension.SECURITY !in selected) MaterialTheme.colorScheme.error

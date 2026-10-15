@@ -54,7 +54,7 @@ class BackendClient {
         val recursive: Boolean = false,
         val attackBudget: Int = 6,
         val useStaticCases: Boolean = true,
-        // 并入「越狱变体集」（100 条：20 个有害目标 × 5 类策略）。
+        // 并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略）。
         // 字段名必须与后端 `SessionRequest.useJailbreakVariants` 逐字一致 ——
         // 后端忽略未知键，名字对不上是**静默丢弃**（变体集永远不跑，且不报错）。
         val useJailbreakVariants: Boolean = false

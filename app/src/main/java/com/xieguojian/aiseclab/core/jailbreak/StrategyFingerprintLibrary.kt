@@ -171,6 +171,115 @@ object StrategyFingerprintLibrary {
                 """(start|begin|respond)\s+(your\s+)?(answer|response)?\s*with\s*[「"'].{0,30}[」"']"""
             ),
             weight = 1.0f
+        ),
+
+        // ── 说服改写（A2，借 FuzzyAI `per`）─────────────────────────────
+        // PAIR 式"反复劝说"的**单轮形态**：不推翻规则，而是反复强调"我需要它 / 你做得到"。
+        // 真正的 PAIR 是迭代改写（每轮针对上一条拒绝理由再劝），那属多轮执行器（A3/A4）；
+        // 这里只取它最有判别力的表面特征 —— 直接劝说的话头。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.PERSUASION,
+            keywords = listOf("拜托你", "求你了", "我知道你可以", "我知道你能", "就这一次", "仅此一次"),
+            patterns = listOf(
+                """(拜托|求)\s*你\s*(了|嘛|吧)?""",
+                """(我知道|相信)\s*你\s*(一定|肯定)?\s*(可以|能|做得到)""",
+                """(就|仅)\s*这\s*一\s*次""",
+                """\b(i\s+know\s+you\s+(can|are\s+able)|i'?m\s+begging\s+you|i\s+beg\s+you|just\s+this\s+once)\b"""
+            ),
+            weight = 1.1f
+        ),
+
+        // ── 说服分类学（A2，借 FuzzyAI `tax`）───────────────────────────
+        // 参考件用一份 41 条的「说服技术分类表」（社会学概念：证据说服 / 逻辑诉求 / 专家背书 /
+        // 权威背书 / 社会认同 / 得寸进尺 / 留面子…）逐条改写同一句请求。
+        // 我们**不搬那张表**（它要求一个攻击 LLM 逐条改写，属 A4 的参数化空间），
+        // 但把它最有判别力的**几种技术**写成固定单轮句式、族内轮转 —— 于是"说服技术"
+        // 这一维在变体集里是可观测的，而不是笼统一句"用了社会工程"。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.TAXONOMY,
+            keywords = listOf(
+                "根据多项研究", "数据表明", "统计显示", "从逻辑上讲", "专家一致认为",
+                "权威机构已经确认", "大家都这么做", "退一步说", "各让一步", "站在同一边"
+            ),
+            patterns = listOf(
+                """(根据|依据).{0,6}(多项|大量|相关)?(研究|数据|统计|调查|报告).{0,12}(表明|显示|指出|证明)""",
+                """(专家|权威)(一致|都|已经|普遍).{0,6}(认为|指出|确认|建议)""",
+                """(退一步|各让一步|折中一下|互相让步)""",
+                """(站在同一边|我们是一伙的|共同的立场|为了我们共同)""",
+                """(according\s+to|studies?\s+(show|suggest)|research\s+(shows?|indicates?))""",
+                """(experts?|authorities)\s+(agree|have\s+confirmed|say)""",
+                """(step\s+back|meet\s+me\s+halfway|let'?s\s+compromise)""",
+                """(on\s+the\s+same\s+side|we'?re\s+on\s+the\s+same)"""
+            ),
+            weight = 1.1f
+        ),
+
+        // ── 历史学术包装（A2，借 FuzzyAI `hst`）─────────────────────────
+        // 参考件里它是 tax 的**第一条**（`Historical/Academic Framing`）。单列成族是因为它
+        // 与「虚构情境」族的落点不同：虚构那族说"这是假的、在写故事"，
+        // 这族说"这是真的、在做研究" —— 后者对模型的压力更大（它在要求**真实**细节）。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.HISTORY_FRAMING,
+            keywords = listOf(
+                "作为历史学", "身为历史学", "我是一名历史学", "历史研究", "学术研究",
+                "为了学术", "从学术", "研究者", "文献研究"
+            ),
+            patterns = listOf(
+                """(作为|身为|我是|我是一名).{0,8}(历史学(家|者|教授)?|学术?研究者|研究员|科研人员)""",
+                """(历史|学术)(研究|考察|论文|文献|角度|用途)""",
+                """(为了|用于|基于)(学术|研究|教学|防御|科普)""",
+                """\b(as|being)\s+a\s+(historian|researcher|scholar|academic)\b""",
+                """\b(historical|academic|scholarly)\s+(research|study|context|purpose|analysis)\b""",
+                """\bfor\s+(academic|research|scholarly)\s+(purposes?|context|work)\b"""
+            ),
+            weight = 1.1f
+        ),
+
+        // ── 思维实验（A2，借 FuzzyAI `exp`）─────────────────────────────
+        // 参考件里这一族**就是一组固定的前后缀**（`PROMPT_PREFIX` / `PROMPT_SUFFIX`），
+        // 不做任何改写 —— 所以这里可以逐字借它的语义，不必压缩。
+        // 它的关键在**后缀**：不是"这只是假设"，而是"预防措施都已到位、没有人会看到" ——
+        // 一句**替模型免除责任**的话。这类"责任转移"话术在真实越狱里比前缀常见得多。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.THOUGHT_EXPERIMENT,
+            keywords = listOf(
+                "思维实验", "思想实验", "颠覆性创新", "预防措施已",
+                "不会被任何人看到", "不会被看到", "不会被人看到"
+            ),
+            patterns = listOf(
+                """(思维|思想)\s*实验""",
+                """(颠覆性|突破性|颠覆式)\s*创新""",
+                """(所有|一切|相关的)?\s*预防措施\s*(都)?\s*(已经|已)\s*(到位|采取|做好)""",
+                """(不会|不被|没有人).{0,8}(任何人)?.{0,4}(看到|察觉|发现|知道)""",
+                """\bthought\s+experiment\b""",
+                """\bdisruptive\s+innovation\b""",
+                """\bprecautions?\s+(have\s+been|are)\s+taken\b""",
+                """\bwill\s+not\s+be\s+seen\s+by\s+anyone\b"""
+            ),
+            weight = 1.2f
+        ),
+
+        // ── 游戏化（A2，借 FuzzyAI `wrd`）───────────────────────────────
+        // 参考件把请求做成"猜词游戏"：既要模型解出被遮住的词，又要它据此给出做法，
+        // 还要求它**不能说出那个词** —— 输入与期望输出**同时被混淆**，两边的安全检测都难命中。
+        // 真正的实现在参考件里要三个辅助 LLM 调用（识别词 / 改写 / 出提示）；
+        // 这里取其**单轮固定壳**（"必须答题但永远不许说出关键词"），机制属 A4 的参数化范围。
+        StrategyFingerprint(
+            strategy = JailbreakStrategy.WORD_GAME,
+            keywords = listOf(
+                "猜词游戏", "文字游戏", "填字游戏", "猜谜游戏", "词语游戏",
+                "不许说出答案", "不许直接说出", "证明你猜对"
+            ),
+            patterns = listOf(
+                """(猜词|文字|填字|猜谜|词语|解谜)\s*游戏""",
+                """(不许|不能|禁止|不准)\s*(直接)?\s*(说出|写出|讲出)\s*(答案|这个词|该词|它)""",
+                """(证明|表明|说明)\s*你\s*(已经)?\s*(猜|得|答)\s*(对|出|正确)""",
+                """\bword\s+game\b""",
+                """\b(guess(ing)?|word)\s+(game|puzzle)\b""",
+                """\b(not\s+allowed\s+to\s+say|never\s+say)\s+the\s+word\b""",
+                """\bprove\s+(that\s+)?you\s+(got|know|solved)\b"""
+            ),
+            weight = 1.2f
         )
     )
 

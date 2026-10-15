@@ -95,6 +95,13 @@ class JailbreakStrategy(str, Enum):
     fiction = "fiction"
     tool_inject = "tool_inject"
     refusal_suppress = "refusal_suppress"
+    # 说服 / 社会工程（A2，2026-10-15 补）。与上面那批方向不同：上面是**对抗性指令**
+    # （把规则当要被推翻的对象），这五族是**哄骗**（让模型觉得"这次应该给"）。
+    persuasion = "persuasion"
+    taxonomy = "taxonomy"
+    history_framing = "history_framing"
+    thought_experiment = "thought_experiment"
+    word_game = "word_game"
     none = "none"
 
 
@@ -244,9 +251,9 @@ class SessionRequest(BaseModel):
     recursive: bool = False
     attackBudget: int = 0            # 每维度 LLM 动态生成攻击条数；0 = 只跑静态回归集（与端上对齐）
     useStaticCases: bool = True      # 是否并入内置静态回归用例集
-    # 是否并入「越狱变体集」（100 条：20 个有害目标 × 5 类策略，见 jailbreak_cases.py）。
+    # 是否并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略，见 jailbreak_cases.py）。
     # 默认 False：默认集是"每维度跑到就算过"的回归基线，变体集是"同意图换包装"的取证样本，
-    # 目的不同、成本差一个量级（安全维度 18 → 118 条），必须由用户显式打开。
+    # 目的不同、成本差一个量级（安全维度 18 → 218 条），必须由用户显式打开。
     # 字段名必须与端上 `BackendClient.SessionRequest.useJailbreakVariants` 逐字一致
     # —— 两端都忽略未知键，名字对不上是**静默丢弃**（变体集就是永远不跑，不报错）。
     useJailbreakVariants: bool = False

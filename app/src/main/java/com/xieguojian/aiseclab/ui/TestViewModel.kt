@@ -45,10 +45,10 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     val useRecursive: StateFlow<Boolean> = _useRecursive.asStateFlow()
 
     /**
-     * 是否并入「越狱变体集」（100 条：20 个有害目标 × 5 类策略）。
+     * 是否并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略）。
      *
-     * 默认关。打开后安全维度从 18 条涨到 118 条 —— 与递归对抗叠加时是最贵的一档
-     * （118 条安全用例 × 每例最多 10 轮），UI 上要把这个代价说清楚。
+     * 默认关。打开后安全维度从 18 条涨到 218 条 —— 与递归对抗叠加时是最贵的一档
+     * （218 条安全用例 × 每例最多 10 轮），UI 上要把这个代价说清楚。
      * 与 [useRecursive] 一样只在内存里，不持久化（每轮显式选择，避免上次开过、这次忘了）。
      */
     private val _useVariants = MutableStateFlow(false)

@@ -123,7 +123,7 @@ class TestRunService : Service() {
                     appendLine("目标模型：${target.name.ifBlank { target.id }}")
                     appendLine("维度：${dims.joinToString("/") { it.label }}")
                     appendLine("递归对抗：$recursive")
-                    appendLine("越狱变体集：$variants（${if (variants) "已并入 100 条" else "未并入"}）")
+                    appendLine("越狱变体集：$variants（${if (variants) "已并入 200 条" else "未并入"}）")
                 }
             )
             val client = BackendClient()

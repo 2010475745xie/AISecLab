@@ -140,11 +140,11 @@ async def run_session(
         # 其余维度的静态用例照样跑，报告里冒出用户没勾的维度。
         cases += [c for c in STATIC_CASES if c.dimension in req.dimensions]
     if req.useJailbreakVariants and Dimension.security in req.dimensions:
-        # 越狱变体集（100 条）**全部是 security 维度**，所以勾了维度才并入 ——
-        # 用户没勾安全维度却冒出 100 条安全用例，与上面那个"未勾维度照样跑"是同一个 bug。
+        # 越狱变体集（200 条）**全部是 security 维度**，所以勾了维度才并入 ——
+        # 用户没勾安全维度却冒出 200 条安全用例，与上面那个"未勾维度照样跑"是同一个 bug。
         # 变体集不参与 attackBudget（那是 LLM 动态生成的口径），它本身就是静态用例。
         cases += JAILBREAK_VARIANT_CASES
-        logger.info("[engine] 并入越狱变体集 %d 条（20 个有害目标 × 5 类策略）",
+        logger.info("[engine] 并入越狱变体集 %d 条（20 个有害目标 × 10 类策略）",
                     len(JAILBREAK_VARIANT_CASES))
     for dim in req.dimensions:
         # attackBudget<=0 时不生成动态用例：委托运行默认只跑 50 条静态回归集（与端上对齐）。
