@@ -45,6 +45,7 @@ import com.xieguojian.aiseclab.core.report.ErosionAnalysis
 import com.xieguojian.aiseclab.core.report.ErosionCurve
 import com.xieguojian.aiseclab.core.report.HardeningAdvisor
 import com.xieguojian.aiseclab.core.report.SafetyMetrics
+import com.xieguojian.aiseclab.core.report.cotNote
 import com.xieguojian.aiseclab.core.report.modelLabel
 import com.xieguojian.aiseclab.ui.chart.BarItem
 import com.xieguojian.aiseclab.ui.chart.ErosionTrack
@@ -283,6 +284,16 @@ fun ReportScreen(
                 color = if (report.tokenUsage == null) MaterialTheme.colorScheme.onSurfaceVariant
                 else MaterialTheme.colorScheme.onSurface
             )
+        }
+
+        // ── CoT 处理口径：报告的分数依赖「被测模型有没有内联思考段」，必须自证 ──
+        // 剥了多少条由 results[].response 现算，不设字段（见 core/report/CoTNote.kt）。
+        // 文案唯一源 = CoTNote.kt（与 Markdown / HTML 导出同源）。
+        item {
+            Spacer(Modifier.height(16.dp))
+            Text("CoT 处理", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            Text(report.cotNote(), style = MaterialTheme.typography.bodyMedium)
         }
 
         // ── 安全指标（方案 §5）：别再只报 ASR ──

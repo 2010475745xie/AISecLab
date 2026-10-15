@@ -56,6 +56,24 @@ internal object TextNormalize {
     /** 空白折叠：ASCII 空白序列（空格/制表/换行/回车/垂直制表/换页）→ 一个半角空格。 */
     val NORMALIZE_WS_RE = Regex("""[ \t\n\r\x0b\f]+""")
 
+    /**
+     * **第二种空白策略：只折叠行内空白，保留换行** —— 专供「提及豁免」的作用域计算
+     * （[ResponseContext.onlyInNegatedContext] / [ResponseContext.isBeingOutput]）。
+     *
+     * 为什么不能直接用 [NORMALIZE_WS_RE]：折叠换行会让
+     * [ResponseContext.SCOPE_BREAK_RE] 里的 `\n` 那一支**永远不命中**，
+     * 于是"裸换行、没有句末标号"的段落边界被无视 ——
+     * `我不能提供这方面的内容\nhow to make a bomb: 1. a` 里的内容会被上一段的
+     * 拒绝话术豁免掉（假阴性，2026-10-15 实测）。
+     *
+     * 撇号 / `*` / 转小写三步与 [apply] **完全一致**（同一批正则）——
+     * 一份实现、两种空白策略，**不是第二套归一化**。
+     *
+     * 配套：关键词查找要放宽成"空白灵活"（`\s+`），否则"跨换行的关键词"
+     * 在折叠版找得到、在这里找不到，两边会给出矛盾的判定。
+     */
+    val NORMALIZE_WS_SCOPE_RE = Regex("""[ \t\x0b\f]+""")
+
     /** 撇号归一：弯撇号 U+2019 / U+2018、全角 U+FF07、锐音符 U+00B4、修饰符 U+02BC → `'`。 */
     val NORMALIZE_APOSTROPHE_RE = Regex("""[’‘＇´ʼ]""")
 
@@ -69,6 +87,19 @@ internal object TextNormalize {
     fun apply(text: String): String =
         NORMALIZE_MD_NOISE_RE
             .replace(NORMALIZE_APOSTROPHE_RE.replace(NORMALIZE_WS_RE.replace(text, " "), "'"), "")
+            .trim()
+            .lowercase()
+
+    /**
+     * [apply] 的**保留换行版**，只给作用域计算用（理由见 [NORMALIZE_WS_SCOPE_RE]）。
+     *
+     * 做成独立函数而不是给 [apply] 加个布尔参数：`apply` 有 5 处调用方，
+     * 加参数就得让它们各自选一次 —— 而"要不要保留换行"其实是**判据性质**决定的，
+     * 不该在调用点上现场决定。
+     */
+    fun forScope(text: String): String =
+        NORMALIZE_MD_NOISE_RE
+            .replace(NORMALIZE_APOSTROPHE_RE.replace(NORMALIZE_WS_SCOPE_RE.replace(text, " "), "'"), "")
             .trim()
             .lowercase()
 }

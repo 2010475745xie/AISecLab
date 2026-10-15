@@ -9,7 +9,7 @@
 
 ## 比什么
 `backend/app/judge.py` 与端上
-`core/judge/{L1PatternRules,ResponseContext,ComplianceDetector,TextNormalize}.kt` 里的
+`core/judge/{L1PatternRules,ResponseContext,ComplianceDetector,TextNormalize,CoT}.kt` 里的
 **同一批常量表**，逐表、逐条、**保序**比较（顺序有意义：命中顺序决定 evidence 里先报哪一条）。
 
 - 字符串表（标记 / 线索 / 词表）：逐字比较。
@@ -46,6 +46,12 @@ KT_FILES = [
     # 把真拒绝读成配合 → 凭空制造一条失守，所以必须机械校验。
     os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
                  "core", "judge", "TextNormalize.kt"),
+    # B1 CoT 治理：`COT_PATTERNS` / `COT_BOUNDARY_PARTS` 是**剥段与断点的单一来源**，
+    # 两端各写一遍（Python 正则 / Kotlin Regex）。走岔的后果不是报错而是静默：
+    # 一端剥了另一端没剥 → 同一回答两端给出不同的拒绝强度（测量失真），
+    # 或一端的段界不算断点 → 思考段里的泄露被正文豁免（假阴性）。必须机械校验。
+    os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
+                 "core", "judge", "CoT.kt"),
 ]
 
 
@@ -92,7 +98,14 @@ def _scan_strings(body: str) -> list[str]:
 
 
 def _match_group(src: str, start: int, opener: str, closer: str) -> tuple[str, int]:
-    """从 src[start]（应为 opener）起，返回括号内的正文与结束位置。"""
+    """从 src[start]（应为 opener）起，返回括号内的正文与结束位置。
+
+    ⚠️ 必须**跳过注释**（`_scan_strings` 早就这么做了，这里曾经漏掉 —— 2026-10-15 踩到）：
+    常量定义上方的注释若含引号（例如写个 `I can't` 的孤立单引号），会被下面的字符串分支
+    当成"字符串开始了"，一路吞到后面某张表里的下一个同种引号才闭合 ——
+    于是括号配对被带偏、**把下一张表的内容也读进来**，表现为"后端 15 段 / 端上 23 段"的
+    假 DIFF（真凶是注释，不是表）。
+    """
     depth = 0
     i = start
     while i < len(src):
@@ -111,6 +124,11 @@ def _match_group(src: str, start: int, opener: str, closer: str) -> tuple[str, i
                     break
                 j += 1
             i = j + 1
+            continue
+        # 注释：Python `#` 到行尾 / Kotlin `//` 到行尾（与 `_scan_strings` 同一套规则）。
+        if c == "#" or (c == "/" and i + 1 < len(src) and src[i + 1] == "/"):
+            j = src.find("\n", i)
+            i = len(src) if j < 0 else j + 1
             continue
         if c == opener:
             depth += 1
@@ -208,6 +226,12 @@ TABLES = [
     ("NORMALIZE_WS_RE", "regex"),
     ("NORMALIZE_APOSTROPHE_RE", "regex"),
     ("NORMALIZE_MD_NOISE_RE", "regex"),
+    # B1 CoT 治理（CoT.kt ↔ judge.py）。第二张空白策略正则是"作用域专用"的
+    # 保留换行版（`NORMALIZE_WS_SCOPE_RE` / `forScope`）；它走岔会让"裸换行"这个
+    # 段落边界在一端消失 → 该端漏判（详见 `TextNormalize.forScope` 的注释）。
+    ("COT_PATTERNS", "regex"),
+    ("COT_BOUNDARY_PARTS", "str"),
+    ("NORMALIZE_WS_SCOPE_RE", "regex"),
     # L1 层（L1PatternRules.kt）
     ("SYSTEM_PROMPT_MARKERS", "str"),
     ("KEY_PATTERNS", "regex"),
@@ -227,6 +251,19 @@ TABLES = [
 
 # “正则”类常量本身是单值（上面用 listOf/Regex 包装或直接 = Regex(...)），
 # 这里统一按"取全部字符串字面量"处理即可（RegexOption 常量不是字符串）。
+
+
+# ── 拼接型常量：`SCOPE_BREAK_RE` 必须把 CoT 段界拼进去（B1）──────────────
+# 它两端都写成"基础字符类 + CoT 段界"的拼接，**但拼法不同**：
+#   后端  `re.compile(r"...字符类...|" + COT_BOUNDARY_SRC)`
+#   端上  `Regex("""...字符类...""" + "|" + CoT.BOUNDARY_PARTS[0])`
+# 直接比 `SCOPE_BREAK_RE` 的正文会把"引用变量的名字不同"当成差异。
+# 正确比法是：把两端的 `SCOPE_BREAK_RE` 正文与 `COT_BOUNDARY_PARTS` **拼起来**再比 ——
+# 这样"某一端忘了拼段界"会表现为拼接结果短一截（DIFF），而那正是要守的东西（漏了它
+# 思考段里的泄露会被正文的拒绝话术豁免）。
+COMBINED = [
+    ("SCOPE_BREAK_RE", "SCOPE_BREAK_RE", "COT_BOUNDARY_PARTS"),
+]
 
 
 def main() -> int:
@@ -273,6 +310,22 @@ def main() -> int:
                 print("         #%d 后端=%r" % (k, a[:110]))
                 print("             端上=%r" % (b[:110],))
         bad.append(name)
+
+    # ── 拼接型常量 ──
+    for label, main_name, part_name in COMBINED:
+        base_py = py_extract(py_src, main_name, "regex") or []
+        base_kt = kt_extract(kt_src, main_name, "regex") or []
+        part_py = py_extract(py_src, part_name, "str") or []
+        part_kt = kt_extract(kt_src, part_name, "str") or []
+        py_all = norm("".join(base_py) + "".join(part_py))
+        kt_all = norm("".join(base_kt) + "".join(part_kt))
+        if py_all and py_all == kt_all:
+            print("  [OK  ] %-28s 正文 + %s 拼接后逐字一致（%d 字符）"
+                  % (label, part_name, len(py_all)))
+            continue
+        print("  [DIFF] %-28s 后端=%r" % (label, py_all[:110]))
+        print("         %-*s 端上=%r" % (len(label), "", kt_all[:110]))
+        bad.append(label)
 
     print()
     if bad:
