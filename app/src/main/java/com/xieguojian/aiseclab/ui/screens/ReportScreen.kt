@@ -408,7 +408,10 @@ fun ReportScreen(
                     SectionHeader(
                         title = "策略 × 意图",
                         expanded = showMatrix,
-                        onToggle = { showMatrix = !showMatrix }
+                        onToggle = { showMatrix = !showMatrix },
+                        // 这一节默认收起、且**图例与矩阵都在折叠体里** ⇒ 摘要行是收起状态下
+                        // 唯一的信息（取数见 SafetyMetrics.matrixLead，不在这里拼字符串）。
+                        lead = metrics.matrixLead
                     )
                     // 图例说明的是**展开后那张图**，跟着 body 一起藏：图看不到，图例就是无主的文字。
                     if (showMatrix) {

@@ -450,6 +450,47 @@ class SafetyMetricsTest {
     }
 
     @Test
+    fun `策略乘意图折叠摘要指向最高ASR那一格`() {
+        // 这一节默认收起、图例与矩阵都在折叠体里 ⇒ 摘要行是收起状态下**唯一**的信息。
+        // 取"最高 ASR 那一格"（哪招最狠），不是"画了多少格"（那只说明规模）。
+        val m = SafetyMetrics.of(
+            listOf(
+                attack("m1", Verdict.FAIL, HarmIntent.MALWARE, JailbreakStrategy.ROLEPLAY),
+                attack("m2", Verdict.PASS, HarmIntent.MALWARE, JailbreakStrategy.ROLEPLAY),
+                attack("e1", Verdict.FAIL, HarmIntent.CHEM_WEAPON, JailbreakStrategy.ENCODING)
+            )
+        )
+        val lead = m.matrixLead!!
+        assertTrue("要报出最高的那个百分比（1/1 那格 = 100%，不是 1/2 那格）：$lead",
+            lead.contains("最高 ASR 100%"))
+        assertTrue("要写清最高的是哪一族 × 哪一意图：$lead",
+            lead.contains(JailbreakStrategy.ENCODING.label) &&
+                lead.contains(HarmIntent.CHEM_WEAPON.label))
+    }
+
+    @Test
+    fun `策略乘意图全0与不可用时的摘要`() {
+        // 全 0 是最容易"看起来没东西可写"的状态，但它恰恰最该写清楚：
+        // 有样本的格全 0%（**测过**的结论），与图例里「空格 = 没测到」严格分开。
+        val m = SafetyMetrics.of(
+            listOf(
+                attack("a", Verdict.PASS, HarmIntent.MALWARE, JailbreakStrategy.ROLEPLAY),
+                attack("b", Verdict.PASS, HarmIntent.CHEM_WEAPON, JailbreakStrategy.ENCODING)
+            )
+        )
+        val lead = m.matrixLead!!
+        assertTrue("全 0 也要成句，不能给空行：$lead", lead.contains("全部 0%"))
+        assertFalse("全 0 时没有「最高」可言：$lead", lead.contains("最高 ASR"))
+
+        // 未标注的旧报告矩阵不渲染（matrixUsable = false）⇒ 摘要也不该给，
+        // 否则会在不渲染的节上留一个无主结论。
+        val old = SafetyMetrics.of(
+            listOf(attack("o", Verdict.PASS, HarmIntent.UNKNOWN, JailbreakStrategy.NONE))
+        )
+        assertNull("矩阵不渲染时摘要必须为空", old.matrixLead)
+    }
+
+    @Test
     fun `没有攻击类用例时不出安全指标章节`() {
         val r = report(benign("b", ExpectedBehavior.SHOULD_ANSWER_CORRECTLY, "正常回答。"))
         assertFalse(ReportGenerator.toMarkdown(r).contains("## 安全指标"))

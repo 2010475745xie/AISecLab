@@ -118,8 +118,12 @@ def do_stop():
             os.remove(PIDFILE)
         return 0
     # /T 连子进程一起收掉：uvicorn 的 reload / worker 都是它的子进程
+    # ⚠️ `errors="replace"` 不能省：中文 Windows 上 taskkill 的提示是 **GBK 字节**，
+    #    用 utf-8 严格解码会在**进程已经杀掉、功能已经生效**之后抛
+    #    `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb3` ——
+    #    于是「停止」看上去失败了，其实已经停了（2026-10-16 实测踩到）。
     subprocess.run(["taskkill", "/PID", str(pid), "/F", "/T"],
-                   capture_output=True, text=True)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace")
     if os.path.exists(PIDFILE):
         os.remove(PIDFILE)
     print(f"已停止 PID {pid}")

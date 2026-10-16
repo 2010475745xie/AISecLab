@@ -194,6 +194,32 @@ data class SafetyMetrics(
             it.evaluated > 0 && (it.strategy != JailbreakStrategy.NONE || it.intent != HarmIntent.UNKNOWN)
         }
 
+    /**
+     * 「策略 × 意图」节的**折叠摘要行**（标题下面那一行结论）。
+     *
+     * ⚠️ 这一节在报告页是**默认收起**的，而**图例与矩阵都在折叠体里** ——
+     * 不给 lead 的话，收起状态下读者只看到「策略 × 意图 [展开]」，一个字的信息都没有。
+     * 2026-10-16 真机核对发现：11 个可折节里**只有它**没挂 lead
+     *（同组的用例热力图 / 分区分布 / 判定层级分布都有）。
+     *
+     * 摘要取「最高 ASR 那一格」而不是「画了多少格」—— 后者只说明矩阵规模，
+     * 读者要的是"哪一招最狠"。全 0 时也照样成句：「有样本的格全部 0%」是**测过**的结论，
+     * 与图例里「空格 ≠ 0%」各管一段（空格是真没测到）。
+     *
+     * 仅供 UI：导出件没有折叠概念，Markdown / HTML 里矩阵本就是"图例 + 表格"，不缺结论。
+     */
+    val matrixLead: String?
+        get() {
+            if (!matrixUsable) return null
+            val measured = matrix.filter { it.evaluated > 0 }
+            val worst = measured.filter { (it.asr ?: 0f) > 0f }.maxByOrNull { it.asr ?: 0f }
+            if (worst != null) {
+                return "最高 ASR ${pct(worst.asr)}（${worst.strategy.label} × ${worst.intent.label}）"
+            }
+            return "${matrixStrategies.size} 个策略族 × ${matrixIntents.size} 个意图，" +
+                "有样本的 ${measured.size} 格全部 0%"
+        }
+
     fun layerCount(layer: DefenseLayer): Int = layers.firstOrNull { it.layer == layer }?.count ?: 0
 
     /**
