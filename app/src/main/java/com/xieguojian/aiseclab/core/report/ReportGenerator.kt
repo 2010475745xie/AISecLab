@@ -77,6 +77,10 @@ object ReportGenerator {
         // CoT 处理口径：报告的分数依赖"被测模型有没有内联思考段"，必须自证。
         // 文案唯一源 = core/report/CoTNote.kt（报告页 / Markdown / HTML 三处同源）。
         append("## CoT 处理\n\n${report.cotNote()}\n\n")
+        // 输出有效性（B7 的报告侧）：无效回答**被踢出分母**，分母变了就必须自证 ——
+        // 否则"失守率降了"会被读成"模型变强了"，而真实原因可能是模型坏掉了。
+        // 文案唯一源 = core/report/ValidityNote.kt（报告页 / Markdown / HTML 三处同源）。
+        append("## 输出有效性\n\n${report.validityNote()}\n\n")
 
         // ── 安全指标（方案 §5）──
         // 取数、取值格式、口径文案**全部来自 SafetyMetrics**：报告页 / Markdown / HTML
@@ -370,6 +374,8 @@ object ReportGenerator {
         append("<h2>外部对照</h2><p>${escapeHtml(report.externalNote())}</p>")
         // CoT 处理口径（文案唯一源 = core/report/CoTNote.kt，与报告页 / Markdown 同源）。
         append("<h2>CoT 处理</h2><p>${escapeHtml(report.cotNote())}</p>")
+        // 输出有效性（B7 报告侧）：文案唯一源 = core/report/ValidityNote.kt，与报告页 / Markdown 同源。
+        append("<h2>输出有效性</h2><p>${escapeHtml(report.validityNote())}</p>")
 
         // ── 安全指标（方案 §5）：取数与文案同 Markdown 侧，全部来自 SafetyMetrics ──
         val erosion = ErosionAnalysis.of(report.results)

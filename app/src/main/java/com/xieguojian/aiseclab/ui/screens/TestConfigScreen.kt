@@ -35,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.api.BackendClient
+import com.xieguojian.aiseclab.core.jailbreak.JailbreakCases
 import com.xieguojian.aiseclab.core.engine.plannedCasesByDimension
 import com.xieguojian.aiseclab.core.engine.variantCaseCount
 import com.xieguojian.aiseclab.core.model.Dimension
@@ -62,8 +63,8 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
     // 条数直接决定耗时和 API 花费，而之前勾完维度是一点概念都没有的。
     //
     // ⚠️ 口径**唯一源 = core/engine/CasePlan.kt**。这里以前自己算了一遍（模块表求和），
-    // 于是"配置页说 250、跑出来 50"时，两个数字各有各的出处、谁也说不清谁错
-    // （2026-10-15 用户报的"勾了变体集数字在 50 和 250 之间横跳"就是这个温床）。
+    // 于是"配置页说的数、跑出来的数"各有各的出处、谁也说不清谁错
+    // （2026-10-15 用户报的"勾了变体集数字横跳"就是这个温床）。
     val casesPerDim = remember(useVariants) { plannedCasesByDimension(useVariants) }
     val totalCases = selected.sumOf { casesPerDim[it] ?: 0 }
     val variantCount = remember { variantCaseCount() }
@@ -172,9 +173,9 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         )
 
         Spacer(Modifier.height(16.dp))
-        // 越狱变体集：同一批有害意图 × 10 类策略（角色扮演/系统提示覆盖/虚构情境/编码混淆/拒绝抑制 +
-        // 说服改写/说服分类学/历史学术包装/思维实验/游戏化）
-        // × 各 20 条 = 200 条。加了它才能回答「换个包装还攻不攻得破」，代价是安全维度条数 ×12。
+        // 越狱变体集：同一批有害意图 × 全部策略族（清单见下面的文案，**从枚举取**，不手抄）。
+        // 加了它才能回答「换个包装还攻不攻得破」，代价是安全维度用例涨一个量级
+        // —— 具体条数见上方预览（唯一口径 = core/engine/CasePlan.kt）。
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("越狱变体集", style = MaterialTheme.typography.titleMedium)
@@ -189,9 +190,11 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
         Text(
             if (Dimension.SECURITY !in selected)
                 "需先勾选「安全性」维度 —— 变体集是安全用例，只勾别的维度它不会跑。"
-            else "💥 再并入 $variantCount 条：20 个有害目标 × 10 类策略" +
-                "（角色扮演 / 系统提示覆盖 / 虚构情境 / 编码混淆 / 拒绝抑制 /" +
-                "说服改写 / 说服分类学 / 历史学术包装 / 思维实验 / 游戏化）。" +
+            // 目标数 / 策略数 / 族名全部**从 JailbreakCases 取**：手抄一份的下场是
+            // 加了一族之后界面还在念旧名单（B7 那轮同型的"两处口径走岔"）。
+            else "💥 再并入 $variantCount 条：${JailbreakCases.GOALS.size} 个有害目标 × " +
+                "${JailbreakCases.STRATEGIES.size} 类策略（" +
+                JailbreakCases.STRATEGIES.joinToString(" / ") { it.label } + "）。" +
                 "用同一批意图只换包装，用来量「哪种手法最容易得手」。",
             style = MaterialTheme.typography.bodySmall,
             color = if (Dimension.SECURITY !in selected) MaterialTheme.colorScheme.error
@@ -289,7 +292,7 @@ fun TestConfigScreen(vm: TestViewModel, onBack: () -> Unit, onStart: () -> Unit)
 /**
  * 「继续上次没跑完的测试」卡片（断点续测）。
  *
- * 为什么值得占配置页最上面一块：一轮 250 条的测试烧的是真 token，被中断后从头跑等于白烧一遍
+ * 为什么值得占配置页最上面一块：一轮上百条的测试烧的是真 token，被中断后从头跑等于白烧一遍
  * （2026-10-15 实际发生过：服务被回收，端上跑了十几条的会话直接没了）。
  * 这里列的是**后端上还没跑完的会话**（`GET /v1/sessions/incomplete`），点「继续」就把
  * sessionId 带进请求（`resumeFrom`），后端把已完成的用例直接复用、只补跑剩下的。

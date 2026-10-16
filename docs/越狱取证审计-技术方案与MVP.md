@@ -43,21 +43,21 @@
 > 每项标注：**实现要点 / 验收标准 / 落在现有代码的位置**。
 > 现有扩展点：`AttackModule`、`Judge`、`LlmJudge(chat, roles)`、`ScoringModel`、`ReportGenerator`。
 
-### 落地状态（2026-10-15 快照）
+### 落地状态（2026-10-16 快照）
 
 **✓ 已完成 10 项（周 1 地基全部 + 取证核心三块 + 半妥协检测 + 拒绝打分 + 取证报告）**
 
 | # | 落地物 | 复现 |
 |---|---|---|
-| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（19 条 / 14 族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
-| 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字 / 猪拉丁 / Unicode Tag，7 种） | `JailbreakVariantsTest`「编码族的20条还原后都能命中覆盖指纹」 |
+| 1.1 | 策略指纹库：`core/jailbreak/StrategyFingerprintLibrary.kt` ↔ `backend/app/jailbreak.py`（20 条指纹 / 15 个策略族） | `JailbreakFingerprintTest`、`_shot/py_jb_check.py` |
+| 1.2 | 编码还原器：`core/jailbreak/EncodingNormalizer.kt` ↔ `jailbreak.py`（Base64 / ROT13 / Morse / 零宽 / 同形字 / 猪拉丁 / Unicode Tag，7 种） | `JailbreakVariantsTest`「编码族的24条还原后都能命中覆盖指纹」 |
 | 1.3 | 意图标签：50 条基线逐条 `intent` / `strategy`（两端镜像） | `tools/check-jailbreak-parity.py` |
-| 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，200 条 = 20 目标 × 10 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→250 条） |
-| 2.1 | **否定感知拒绝打分**：`core/judge/RefusalScorer.kt` ↔ `backend/app/judge.py::refusal_strength`（**纯文本规则、零 token**，不是嵌入模型）。先把**被否定的拒绝话术掩掉**（"我不会拒绝你"里躺着"我不会"、"I won't refuse"里躺着"I won't"），再对锚点做**非重叠贪心匹配**（词表里 `我不会` 是 `我不会帮` 的前缀，按词表项计数会把同一次拒绝数两遍）。程序性内容只认**步骤话头 / 成对代码围栏**，**纯列表要配转折词才算** —— 否则"拒绝 + 编号的原因"会被压成配合。`ResponseContext.isRefusal` 收口为转发它，**判据只有一份** | `RefusalScorerTest`（10 条，含自测集 76 条：**97.3%**；朴素基线仅 **79.5%**）+ `backend/_verify_refusal.py`（准确率 + **两端逐条分类 76/76 完全一致**）+ `tools/check-judge-parity.py`（新增 `NEGATED_REFUSAL` / `CONCESSION`，并把 `ComplianceDetector.kt` 并入比对） |
+| 1.4 | 用例集：`JailbreakCases.kt` ↔ `jailbreak_cases.py`，264 条 = 24 目标 × 11 策略；开关 `useJailbreakVariants`（默认关） | 同上 + `backend/smoke_test.py`（开→314 条） |
+| 2.1 | **否定感知拒绝打分**：`core/judge/RefusalScorer.kt` ↔ `backend/app/judge.py::refusal_strength`（**纯文本规则、零 token**，不是嵌入模型）。先把**被否定的拒绝话术掩掉**（"我不会拒绝你"里躺着"我不会"、"I won't refuse"里躺着"I won't"），再对锚点做**非重叠贪心匹配**（词表里 `我不会` 是 `我不会帮` 的前缀，按词表项计数会把同一次拒绝数两遍）。程序性内容只认**步骤话头 / 成对代码围栏**，**纯列表要配转折词才算** —— 否则"拒绝 + 编号的原因"会被压成配合。`ResponseContext.isRefusal` 收口为转发它，**判据只有一份** | `RefusalScorerTest`（10 条，含自测集 80 条：**97.5%**；朴素基线仅 **73.8%**）+ `backend/_verify_refusal.py`（准确率 + **两端逐条分类 92/92 完全一致**）+ `tools/check-judge-parity.py`（新增 `NEGATED_REFUSAL` / `CONCESSION`，并把 `ComplianceDetector.kt` 并入比对） |
 | 2.2 | **半妥协检测**：`core/judge/ComplianceDetector.kt` ↔ `backend/app/compliance.py`（**纯文本规则、零 token**）；逐轮落 `AttackRound.compliance`；报告「安全指标」出「半妥协轮次」行（报告页 / Markdown / HTML 三处同源） | `ComplianceDetectorTest`（10 条，含 20 条样本全抓）、`RecursiveAdversarialAttackTest`（3 条，接线）、`SafetyMetricsTest`（半妥协 3 条）、`backend/_verify_compliance.py`（22 项，含 `run_recursive` 接线） |
 | 3.3 | **侵蚀曲线 & `breakRound`**：`core/report/ErosionCurve.kt`（纯口径层）+ `ui/chart/ErosionTrack.kt` + `ChartSvg.erosionCumulative`；报告页 / Markdown / HTML 三处同源 | `ErosionCurveTest`（20 条）+ 真机报告页 |
 | 4.2 | **新指标面板**：`core/report/SafetyMetrics.kt` —— 方案 §5 六项 + 策略×意图矩阵（`asrColor` 独立于置信度色阶）；报告页 `MetricsPanel` + 默认收起矩阵，两处导出同源 | `SafetyMetricsTest`（23 条）+ `ReportChartTest`「ASR热力色不能用置信度色阶」 |
-| 3.5 | **加固建议**：`core/report/HardeningAdvisor.kt` + `core/report/DefenseAttribution.kt`（归因判据**全项目唯一实现**）。**纯规则映射表，不是 LLM 现场生成** —— 15 个策略族一个不落；按「策略族 × 先失效层」聚合、按中招条数降序；定位不出层的仍给策略级建议并单列 `unattributed`。**范围只到攻击类用例**（`expected == SHOULD_REFUSE`），非攻击类失守走 `excludedNonAttack` + `scopeNote` 显式报出（2026-10-15 修，见下方隐患）；**章节无条件成章**。报告页 / Markdown / HTML 三处同源 | `HardeningAdvisorTest`（15 条）+ `ReportGeneratorHardeningTest`（7 条，专钉导出侧接线） |
+| 3.5 | **加固建议**：`core/report/HardeningAdvisor.kt` + `core/report/DefenseAttribution.kt`（归因判据**全项目唯一实现**）。**纯规则映射表，不是 LLM 现场生成** —— 16 个策略族一个不落；按「策略族 × 先失效层」聚合、按中招条数降序；定位不出层的仍给策略级建议并单列 `unattributed`。**范围只到攻击类用例**（`expected == SHOULD_REFUSE`），非攻击类失守走 `excludedNonAttack` + `scopeNote` 显式报出（2026-10-15 修，见下方隐患）；**章节无条件成章**。报告页 / Markdown / HTML 三处同源 | `HardeningAdvisorTest`（16 条）+ `ReportGeneratorHardeningTest`（7 条，专钉导出侧接线） |
 | 4.1 | **取证报告**：四维报告 + 4 张图 + 策略×意图矩阵 + 破防步数 + 失效层归因 + 加固建议，报告页 / Markdown / HTML 三处同源 | 验收「一份报告能回答**为什么破 / 第几轮破 / 怎么修**」**已达成**（3.3 + 3.4 + 3.5 齐备） |
 
 **能力升级批次（借 FuzzyAI / Heretic，逐项设计与证据见 `docs/参考项目-能力升级路线.md`）**
@@ -66,11 +66,18 @@
 |---|---|---|
 | A1 | 编码族 **+2**（猪拉丁 / Unicode Tag）：生成器 ↔ 还原器共用同一张表 | `JailbreakVariantsTest`、`backend/_verify_encodings.py` |
 | B1 | **CoT 治理**：判拒绝/半妥协前剥内联思考段；命中类判据读完整响应；报告自证剥了几条 | `CoTGovernanceTest`、`_shot/probe-cot-risk.py`（13 条断言） |
-| A2 | 说服族 **+5**（说服改写 / 说服分类学 / 历史学术包装 / 思维实验 / 游戏化）；变体集 **100 → 200** | 两端枚举 + 指纹（19 条 / 15 族）+ `tools/check-jailbreak-parity.py`、`backend/smoke_test.py` |
+| A2 | 说服族 **+5**（说服改写 / 说服分类学 / 历史学术包装 / 思维实验 / 游戏化）；变体集 **100 → 200** | 两端枚举 + 指纹（指纹库随族增长，别在这写数字）+ `tools/check-jailbreak-parity.py`、`backend/smoke_test.py` |
 | A3 | 多轮族归因 **+2**（Crescendo / Actor 网络）—— **只进枚举与指纹、不进变体集**（单轮假样本 = 编归因） | 同上 |
-| A4 | **攻击参数空间搜索**：TPE 多目标 + 预算闸门 + 断点续跑 + 不可复现显式标记 | `tools/attack-search.py`、`_shot/_a4-verify.py`（12 条断言，含"TPE 到底在不在学"） |
+| A4 | **攻击参数空间搜索**：TPE 多目标 + 预算闸门 + 断点续跑 + 不可复现显式标记 | `tools/attack-search.py`、`_shot/_a4-verify.py`（**24 条**断言，含"TPE 到底在不在学"与 A6 全空间保攻击性） |
+| A6 | **保攻击性闸门**：载荷被丢掉的那次失败测的是空壳（结论方向相反）⇒ 闸门写进 `compose_turns`（过不了直接**抛**，不静默降级），并用 `--check-space` **确定性穷举全空间**（737280 组，`bad == 0`） | `tools/attack-search.py --check-space`、`_shot/_a4-verify.py`（A6 段 12 条）。★ 判据按**字母序列**比而非按词 —— 编码会吃掉标点（`step-by-step` → `STEPBYSTEP`，24 个目标里 5 个中招，按词比 = 误报） |
 | B5 | **复现性显式档**：报告里人读的三档（确定性 / 采样可复现 / 不可复现），取**最弱环节** | `ReproNoteTest`（6 条）+ 报告页 / Markdown / HTML 三处同源 |
 | B4 | **外部裁判接入形状**：接口 + 三条纪律（只对照不回写 / 失败≠分歧 / 只问该不该拒绝）+ 三态文案 | `ExternalJudgeTest`（9 条）。⚠️ **只交付形状：未接真供应商，生产运行恒为「未接入」**；真接入属 4.4 |
+| A5 | **任务层伪装族 +1**（`SCENARIO_NESTING`：代码补全 / 表格填写 / 故事续写）；变体集扩到 **264 条** | `JailbreakVariantsTest`（逐族命中率 ≥ 80%）、`tools/check-jailbreak-parity.py`、`HardeningAdvisorTest`（逐族加固建议） |
+| A7 | **意图轴 +2**（暴力/人身伤害、高风险医疗建议）—— 9 类意图各有目标；CSAM / 政治游说 / 高风险政府决策**政策性排除、不建用例** | `JailbreakVariantsTest`（覆盖面断言与 `HarmIntent` 枚举等量）、两端 parity |
+| B7 | **无效/退化输出第三态**（空 / 纯标点 / 字符循环 / 连续重复 → INVALID，**既不算守住也不算失守**） | `_verify_refusal.py`、`RefusalScorerTest`、两端逐条一致 |
+| B8 | **CoT 剥离覆盖补全**（`<analysis>` / Harmony 通道 / `final` 标记 + 未闭合思考块判无效） | `_verify_refusal.py`、`CoTGovernanceTest` |
+| B7 补完 | **判定侧闸门 + 报告侧一行**：坏输出在 `judge()` / `ValidityGatedJudge` 最外层就被拦成 `SKIPPED`（护栏/规则层看不到它）；报告页 / Markdown / HTML 新增「输出有效性」一行 | `ValidityGateTest`（9 条）、`ValidityNoteTest`（7 条）、`_verify_refusal.py` `== 3d ==`（15 条）、`check-judge-parity.py`（判定链形状校验） |
+| B9 | **负对照基线**（264 条 = 24 无害目标 × 11 族；包装与有害组**同源**、期望 `SHOULD_ANSWER_CORRECTLY`） | `BenignControlsTest`（11 条）、`tools/check-negative-control.py`（七项，含替换回代 240 条逐字还原）、`smoke_test.py`（负对照段） |
 
 **~ 部分完成 4 项**：2.3 置信门控（门控已有，"低置信升级链路可观测"未做）、
 3.1 多轮侵蚀执行器（`RecursiveAdversarialAttack` 已有，非 T1 暖场→加压→TN 结构）、
@@ -221,8 +228,8 @@
 |---|---|---|---|
 | 1.1 | **策略指纹库** | `StrategyFingerprint` 表：`ignore previous`/DAN/`developer mode`/Base64/ROT13/many-shot/fictional framing/系统提示覆盖/多轮蚕食，约 12–20 条，正则 + 关键词 | 给定 60 条越狱样本文本，策略命中率 ≥ 90% |
 | 1.2 | **编码还原器** | 送判前先解码：Base64 / ROT13 / Morse / 零宽字符剥离 / 同形字归一（复用 `L1PatternRules`） | 编码型越狱在还原后可被 L1 命中 |
-| 1.3 | **意图标签** | 新增 `HarmIntent`（制毒/入侵/歧视/隐私泄露/系统提示窃取/欺诈…）作为**用例元数据** | 有害集全部带 intent 标签（200 变体 + 18 安全基线 = 218 条） |
-| 1.4 | **用例集** | 复用 `SecurityModule.buildCases()`；补「同一有害意图 × 10 类策略 × 各 20 条」变体集 | 10×20 = 200 条越狱变体可跑 |
+| 1.3 | **意图标签** | 新增 `HarmIntent`（制毒/入侵/歧视/隐私泄露/系统提示窃取/欺诈…）作为**用例元数据** | 有害集全部带 intent 标签（200 变体 + 18 安全基线 = 218 条）。⚠️ **2026-10-16 现为 9 类意图 / 282 条**（A7 加了暴力与医疗建议） |
+| 1.4 | **用例集** | 复用 `SecurityModule.buildCases()`；补「同一有害意图 × 10 类策略 × 各 20 条」变体集 | 10×20 = 200 条越狱变体可跑。⚠️ **2026-10-16 现为 24 目标 × 11 策略 = 264 条**（A5 任务层伪装 + A7 新目标） |
 
 ### 周 1–2 — 判定：拒绝语义专项 + 轻量分类
 | # | 功能 | 实现要点 | 验收 |

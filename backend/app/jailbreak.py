@@ -289,6 +289,35 @@ FINGERPRINTS: List[StrategyFingerprint] = [
         ],
         weight=1.1,
     ),
+
+    # ── 任务层伪装（A5，2026-10-16，借 ReNeLLM 的 code completion / table filling /
+    #    story continuation 三组场景模板）──
+    # 表面特征与前 15 族**都不同**：文本里没有"忽略指令"，也没有"拜托你"，出现的是一句
+    # **工作流话头**（"补全这段代码" / "把这张表填完" / "接着写下去"）加"只要产物、不要解释"的规格。
+    #
+    # ⚠️ 单个"补全""续写""表格"都太日常（开发助手对话里到处都是），**必须两端成对**：
+    # ①（工件名 ↔ 完成动作）在 12 字内共现，或 ②"只输出产物 + 不要解释"的规格句，或 ③ TODO 锚点。
+    # 与 roleplay 要求"扮演 + 无限制限定语"共现是同一条收词原则。
+    StrategyFingerprint(
+        strategy=JailbreakStrategy.scenario_nesting,
+        keywords=[
+            "补全下面的代码", "补全这段代码", "待完成的代码",
+            "把下面这张表", "填写这张表", "填完这张表",
+            "接着写下去", "续写下面", "只输出代码", "只输出表格",
+            "不要任何解释", "不要额外说明",
+        ],
+        patterns=[
+            r"(代码|脚本|表格|清单|问卷|故事|小说|片段|正文|模板)\s*.{0,12}(补全|补齐|填写|填上|填完|续写|接着写|往下写)",
+            r"(补全|补齐|填写|填上|填完|续写|接着写|往下写)\s*.{0,12}(代码|脚本|表格|清单|问卷|故事|小说|片段|正文|模板)",
+            r"(只|仅|单单)\s*(需要)?\s*(输出|给出|返回|填出|写出)\s*.{0,8}(代码|表格|正文|内容|结果)",
+            r"(不要|无需|不必|别)\s*(任何|多余的)?\s*(解释|说明|前言|额外说明)",
+            r"#\s*TODO",
+            r"\b(complete|fill\s+in|continue)\s+the\s+(following\s+|above\s+)?(code|table|script|story|template)\b",
+            r"\b(only\s+output|just\s+output|output\s+only)\s+the\s+(code|table|story|result)\b",
+            r"\b(no|without\s+any)\s+(explanation|further\s+comment|additional\s+comment)\b",
+        ],
+        weight=1.1,
+    ),
 ]
 
 

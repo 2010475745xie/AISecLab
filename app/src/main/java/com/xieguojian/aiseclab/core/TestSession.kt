@@ -13,6 +13,7 @@ import com.xieguojian.aiseclab.core.engine.modules.SecurityModule
 import com.xieguojian.aiseclab.core.judge.Judge
 import com.xieguojian.aiseclab.core.judge.LlmJudge
 import com.xieguojian.aiseclab.core.judge.RuleJudge
+import com.xieguojian.aiseclab.core.judge.ValidityGatedJudge
 import com.xieguojian.aiseclab.core.judge.guard.GuardJudge
 import com.xieguojian.aiseclab.core.judge.guard.HttpSafetyGuard
 import com.xieguojian.aiseclab.core.judge.guard.LlamaCppSafetyGuard
@@ -48,11 +49,11 @@ class TestSession(
     private val dimensions: Set<Dimension>,
     private val useRecursive: Boolean,
     /**
-     * 是否并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略，见
+     * 是否并入「越狱变体集」（264 条：24 个有害目标 × 11 类策略，见
      * [com.xieguojian.aiseclab.core.jailbreak.JailbreakCases]）。
      *
      * 默认关：默认集是"每个维度跑到就算过"的回归基线；变体集是"同意图换包装"的取证样本，
-     * 目的不同，成本差一个量级（安全维度 18 → 218 条）。由用户在测试配置里显式打开。
+     * 目的不同，成本差一个量级（安全维度 18 → 282 条）。由用户在测试配置里显式打开。
      */
     private val includeVariants: Boolean = false
 ) {
@@ -118,16 +119,18 @@ class TestSession(
         val ruleJudge = RuleJudge(llmJudge = llmJudge)
 
         safetyGuard = buildGuard()
-        val judge: Judge = if (guardProfile != null && safetyGuard != null) {
-            GuardJudge(
-                guard = safetyGuard!!,
-                rules = ruleJudge,
-                threshold = guardProfile.threshold,
-                reviewBand = guardProfile.reviewBand
-            )
-        } else {
-            ruleJudge
-        }
+        val judge: Judge = ValidityGatedJudge(
+            if (guardProfile != null && safetyGuard != null) {
+                GuardJudge(
+                    guard = safetyGuard!!,
+                    rules = ruleJudge,
+                    threshold = guardProfile.threshold,
+                    reviewBand = guardProfile.reviewBand
+                )
+            } else {
+                ruleJudge
+            }
+        )
 
         val attackerEp = resolveEndpoint()
         val attackerChat: (suspend (List<ChatMessage>) -> String)? = attackerEp.let { ep ->

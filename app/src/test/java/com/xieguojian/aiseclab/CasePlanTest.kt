@@ -12,11 +12,11 @@ import org.junit.Test
  * 「本轮要跑多少条」的唯一口径（`core/engine/CasePlan.kt`）。
  *
  * 为什么值得钉住这几个数：2026-10-15 用户报「勾了越狱变体集之后，数字在 50 和 250 之间横跳」。
- * 根子不在算术，而在**同一个问题有两个来源**：配置页是端上自己推的（250），
+ * 根子不在算术，而在**同一个问题有两个来源**：配置页是端上自己推的（当时是 250），
  * 运行时是后端实际跑出来的（50 —— 那次连的后端是旧的冻结出包，不认识开关字段，静默丢弃）。
  *
  * 所以这些断言钉的是三个数各自是什么、以及**变体集只挂在安全维度上**这条归属规则：
- * 勾了别的维度却冒出 200 条安全用例，是以前修过的同型 bug（未勾维度照样跑）。
+ * 勾了别的维度却冒出变体集那批安全用例，是以前修过的同型 bug（未勾维度照样跑）。
  */
 class CasePlanTest {
 
@@ -26,15 +26,15 @@ class CasePlanTest {
     }
 
     @Test
-    fun 勾上变体集时全维度是250条() {
-        // 50 + 200。这个数字必须与后端 engine.run_session 取用例的结果一致，
+    fun 勾上变体集时全维度是314条() {
+        // 50 + 264。这个数字必须与后端 engine.run_session 取用例的结果一致，
         // 否则配置页的预告就是在骗用户（耗时和 API 花费都按它估）。
-        assertEquals(250, plannedCaseCount(Dimension.values().toSet(), variants = true))
+        assertEquals(314, plannedCaseCount(Dimension.values().toSet(), variants = true))
     }
 
     @Test
     fun 变体集条数与模块一致() {
-        assertEquals(200, variantCaseCount())
+        assertEquals(264, variantCaseCount())
     }
 
     @Test

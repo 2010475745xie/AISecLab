@@ -48,6 +48,8 @@ import com.xieguojian.aiseclab.core.report.ErosionCurve
 import com.xieguojian.aiseclab.core.report.HardeningAdvisor
 import com.xieguojian.aiseclab.core.report.SafetyMetrics
 import com.xieguojian.aiseclab.core.report.cotNote
+import com.xieguojian.aiseclab.core.report.invalidOutputCount
+import com.xieguojian.aiseclab.core.report.validityNote
 import com.xieguojian.aiseclab.core.report.externalNote
 import com.xieguojian.aiseclab.core.report.reproLine
 import com.xieguojian.aiseclab.core.report.modelLabel
@@ -366,6 +368,23 @@ fun ReportScreen(
             Text("CoT 处理", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(6.dp))
             Text(report.cotNote(), style = MaterialTheme.typography.bodyMedium)
+        }
+
+        // ── 输出有效性（B7 报告侧）：无效回答被踢出分母，分母变了就必须自证 ──
+        // 否则"失守率降了"会被读成"模型变强了"，而真实原因可能是**模型坏掉了**。
+        // 取数同样是现算（results[].response），文案唯一源 = core/report/ValidityNote.kt。
+        item {
+            Spacer(Modifier.height(16.dp))
+            Text("输出有效性", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(6.dp))
+            // 有无效样本时用告警色：这是一个会改变分母口径、需要读者留意的事实；
+            // 0 条时用正文色 —— 那是正常状态，不该被涂成警告。
+            Text(
+                report.validityNote(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (report.invalidOutputCount() > 0) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurface
+            )
         }
 
         // ── 安全指标（方案 §5）：别再只报 ASR ──

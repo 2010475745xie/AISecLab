@@ -99,9 +99,9 @@ cd C:\AISecLab\backend
 
 ### 2.2 搬到 AISecLab 的那个形态
 
-AISecLab 现在 `core/jailbreak/` + `RecursiveAdversarialAttack` 是**规则 / 贪心**（策略族 × 变体，变体集 200 条开关默认关）。可借的是把"试试这几条"升级成"在参数空间里搜"：
+AISecLab 现在 `core/jailbreak/` + `RecursiveAdversarialAttack` 是**规则 / 贪心**（策略族 × 变体，变体集开关默认关）。可借的是把"试试这几条"升级成"在参数空间里搜"：
 
-- **搜索空间** = 攻击提示的构成：策略族 × 变体模板 × 轮数 × 前缀/后缀 × 编码方式。那 200 条变体集正好是**候选点**；
+- **搜索空间** = 攻击提示的构成：策略族 × 变体模板 × 轮数 × 前缀/后缀 × 编码方式。那批变体集正好是**候选点**；
 - **多目标** = 「失守率 ↑」+「但模型没变笨」。第二个目标我们现在**已有代理指标**：多次采样的 `stability`、`JudgeResult.disagreements`、抗幻觉维度得分 —— 不一定要 KL；
 - **预算闸门** = 直接复用 `Report.tokenUsage` / `tokenSpendLine()` 做**成本上限**，超预算就停。这是 Heretic 没有、而我们**必须有**的东西。
 

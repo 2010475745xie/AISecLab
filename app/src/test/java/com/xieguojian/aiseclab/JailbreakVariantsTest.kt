@@ -45,16 +45,16 @@ class JailbreakVariantsTest {
     // ── 规模与结构 ────────────────────────────────────────────────────
 
     @Test
-    fun `变体集正好200条且每个策略族各20条`() {
-        assertEquals("变体集总量不对", 200, variants.size)
+    fun `变体集正好264条且每个策略族各24条`() {
+        assertEquals("变体集总量不对", 264, variants.size)
         JailbreakCases.STRATEGIES.forEach { s ->
             assertEquals(
-                "策略族 ${s.id} 的条数不是 20（策略 × 意图矩阵会因此不平衡）",
-                20, variants.count { it.strategy == s }
+                "策略族 ${s.id} 的条数不是 24（策略 × 意图矩阵会因此不平衡）",
+                24, variants.count { it.strategy == s }
             )
         }
-        // 10 类 × 20 = 200，两处数字必须自洽，否则"200 条"是碰巧凑出来的
-        assertEquals(200, JailbreakCases.STRATEGIES.size * JailbreakCases.GOALS.size)
+        // 11 类 × 24 = 264，两处数字必须自洽，否则"264 条"是碰巧凑出来的
+        assertEquals(264, JailbreakCases.STRATEGIES.size * JailbreakCases.GOALS.size)
     }
 
     @Test
@@ -83,7 +83,7 @@ class JailbreakVariantsTest {
         assertEquals("默认基线集被改了 —— 变体集必须是**额外**的一批，不能替换掉回归基线", 50, base.size)
         assertTrue("默认基线里混进了变体用例", base.none { it.id.startsWith("jbv-") })
         assertEquals("安全维度基线条数变了", 18, SecurityModule().buildCases().size)
-        assertEquals("变体集模块条数不是 200", 200, JailbreakVariantsModule().buildCases().size)
+        assertEquals("变体集模块条数不是 264", 264, JailbreakVariantsModule().buildCases().size)
     }
 
     // ── 1.3 意图标签 ──────────────────────────────────────────────────
@@ -95,9 +95,15 @@ class JailbreakVariantsTest {
             assertTrue("${it.id} 的策略是 none —— 变体集全部带包装，none 只能属于基线",
                 it.strategy != JailbreakStrategy.NONE)
         }
-        // 覆盖面：变体集必须真的铺开在多类意图上，否则"策略 × 意图矩阵"只有一行有数
-        val intents = variants.map { it.intent }.toSet()
-        assertTrue("变体集覆盖的意图只有 $intents，太窄", intents.size >= 6)
+        // 覆盖面：变体集必须铺满**全部已定义的有害意图**，而不是"至少 6 类"。
+        // 钉成与 HarmIntent 等量，是为了让「加了新意图却忘了加目标」当场变红 ——
+        // 那种情况下策略 × 意图矩阵会凭空少一行，而**少一行不会报错**，报告上完全看不出来。
+        val intents = variants.map { it.intent.id }.toSet()
+        val declared = HarmIntent.entries.map { it.id }.toSet() - HarmIntent.UNKNOWN.id
+        assertEquals(
+            "变体集没覆盖这些意图：${declared - intents}",
+            declared, intents
+        )
         assertEquals("GOALS 里有重复 slug", JailbreakCases.GOALS.size,
             JailbreakCases.GOALS.map { it.slug }.toSet().size)
     }
@@ -117,20 +123,20 @@ class JailbreakVariantsTest {
     }
 
     @Test
-    fun `全量250条用例都带结构化意图与策略字段`() {
+    fun `全量314条用例都带结构化意图与策略字段`() {
         val all = listOf(
             SecurityModule(), ConsistencyModule(), FactualityModule(), RobustnessModule(),
             JailbreakVariantsModule()
         ).flatMap { it.buildCases() }
-        assertEquals("全量条数不对（50 基线 + 200 变体）", 250, all.size)
+        assertEquals("全量条数不对（50 基线 + 264 变体）", 314, all.size)
         // 字段必须显式存在、可空值域之外 —— 缺省值只在"旧数据反序列化"时才是合法的
         all.forEach {
             assertNotNull("${it.id} 的 intent 字段缺失", it.intent)
             assertNotNull("${it.id} 的 strategy 字段缺失", it.strategy)
         }
-        // 有害用例（安全维度 18 + 变体 200）必须全部有具体意图，不允许 unknown
+        // 有害用例（安全维度 18 + 变体 264）必须全部有具体意图，不允许 unknown
         val harmful = all.filter { it.expected == ExpectedBehavior.SHOULD_REFUSE }
-        assertEquals("有害用例条数不对（18 基线 + 200 变体）", 218, harmful.size)
+        assertEquals("有害用例条数不对（18 基线 + 264 变体）", 282, harmful.size)
         val unclassified = harmful.filter { it.intent == HarmIntent.UNKNOWN }
         assertTrue("这些有害用例没有归类意图：${unclassified.map { it.id }}", unclassified.isEmpty())
     }
@@ -250,10 +256,10 @@ class JailbreakVariantsTest {
     }
 
     @Test
-    fun `编码族的20条还原后都能命中覆盖指纹`() {
+    fun `编码族的24条还原后都能命中覆盖指纹`() {
         // 这是 1.2 的验收本身：还原不是"看起来解出来了"，而是**还原后能被检测器命中**
         val encoded = variants.filter { it.encoded }
-        assertEquals("编码族条数不是 20", 20, encoded.size)
+        assertEquals("编码族条数不是 24", 24, encoded.size)
         encoded.forEach { c ->
             val matched = EncodingNormalizer.forMatching(c.prompt)
             val strs = StrategyFingerprintLibrary.strategiesOf(matched)

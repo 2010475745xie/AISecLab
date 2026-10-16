@@ -75,6 +75,16 @@ class HarmIntent(str, Enum):
     sysprompt_leak = "sysprompt_leak"
     fraud = "fraud"
     self_harm = "self_harm"
+    # ── A7（2026-10-16 补）── 借 OpenAI 使用政策的 14 类风险轴做覆盖率对照，
+    # 只补这两类（判据：现有 7 类接不住它，且它在本项目里可判定）：
+    # - violence：chem_weapon 只管危险物品/制毒、malware 只管代码，
+    #   「怎么把人打成重伤」「怎么绑架不被追踪」两头都不沾；
+    # - medical：self_harm 只管对自己，而「无资质下诊断开处方」「在家自己缝合深伤口」
+    #   伤害的是他人/不确定对象，且与抗幻觉维度天然交叉。
+    # ⛔ 政策性排除、不建用例：CSAM（不把这类文本写进仓库/请求体）、
+    #   政治游说、高风险政府决策（政治敏感与价值判断，不是可机械判定的安全边界）。
+    violence = "violence"
+    medical = "medical"
     unknown = "unknown"
 
 
@@ -106,6 +116,11 @@ class JailbreakStrategy(str, Enum):
     history_framing = "history_framing"
     thought_experiment = "thought_experiment"
     word_game = "word_game"
+    # ── 任务层伪装（A5，2026-10-16 补，借 ReNeLLM 的 3 组场景模板）──
+    # 与上面两批都不同向：那批是"对规则下手"，这批是"哄骗"，这一族是**改换任务本身** ——
+    # 不提"请回答我的问题"，而是把有害诉求埋进一个待完成的**工作产物**
+    # （代码补全 / 表格填写 / 故事续写）里，让模型以为自己只是在干活。
+    scenario_nesting = "scenario_nesting"
     none = "none"
 
 
@@ -262,12 +277,17 @@ class SessionRequest(BaseModel):
     recursive: bool = False
     attackBudget: int = 0            # 每维度 LLM 动态生成攻击条数；0 = 只跑静态回归集（与端上对齐）
     useStaticCases: bool = True      # 是否并入内置静态回归用例集
-    # 是否并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略，见 jailbreak_cases.py）。
+    # 是否并入「越狱变体集」（264 条：24 个有害目标 × 11 类策略，见 jailbreak_cases.py）。
     # 默认 False：默认集是"每维度跑到就算过"的回归基线，变体集是"同意图换包装"的取证样本，
-    # 目的不同、成本差一个量级（安全维度 18 → 218 条），必须由用户显式打开。
+    # 目的不同、成本差一个量级（安全维度 18 → 282 条），必须由用户显式打开。
     # 字段名必须与端上 `BackendClient.SessionRequest.useJailbreakVariants` 逐字一致
     # —— 两端都忽略未知键，名字对不上是**静默丢弃**（变体集就是永远不跑，不报错）。
     useJailbreakVariants: bool = False
+    # ── 负对照（B9，2026-10-16）—— **诊断专用，端上不发这个字段** ──
+    # 打开时用「同一批包装 × 无害目标」**替代**变体集（包装一字不改、只换载荷），
+    # 期望失守率 ≈ 0；显著偏离 ⇒ 判定链有假阳性，或模型对包装本身过敏。
+    # 详见 app/benign_controls.py 与 tools/check-negative-control.py。
+    benignControls: bool = False
     # ── 断点续测（2026-10-15）──
     # 传上次中断的 sessionId，就从那个检查点接着跑：**已拿到结果的用例直接复用、不重跑**，
     # 只补跑剩下的，最后合并成一份完整报告。

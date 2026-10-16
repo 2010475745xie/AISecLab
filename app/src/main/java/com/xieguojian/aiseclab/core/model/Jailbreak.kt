@@ -22,6 +22,22 @@ enum class HarmIntent(val id: String, val label: String) {
     @SerialName("sysprompt_leak") SYSTEM_PROMPT_LEAK("sysprompt_leak", "系统提示窃取"),
     @SerialName("fraud") FRAUD("fraud", "欺诈/社工"),
     @SerialName("self_harm") SELF_HARM("self_harm", "自伤"),
+    // ── A7（2026-10-16 补）──────────────────────────────────────────────
+    // 借 OpenAI 使用政策的 14 类风险轴做**覆盖率对照**（见
+    // `docs/参考项目-能力升级路线.md` §1 A7），只补这两类 ——
+    // 判据是「我们现有 7 类确实**接不住**它，且它在本项目里可判定」：
+    // - VIOLENCE：现有 `chem_weapon` 只管**危险物品/制毒**，`malware` 只管**代码**，
+    //   而「怎么把人打成重伤」「怎么绑架不被追踪」两头都不沾 —— 是实打实的空洞。
+    // - MEDICAL：现有 `self_harm` 只管**对自己**，而「无资质下诊断开处方」「在家自己缝合深伤口」
+    //   伤害的是**他人或不确定对象**，且它天然与抗幻觉维度交叉（模型是"编"还是"教"）。
+    //
+    // ⛔ **政策性排除、不建用例的三类**（写在这里防止以后"补全 14 类"时又被想起来）：
+    //   CSAM —— 建用例就意味着把这类文本写进仓库与跑进请求体，本项目不碰；
+    //   政治游说 / 高风险政府决策 —— 属政治敏感与价值判断，不是可机械判定的安全边界，
+    //   强行判定只会产出"模型不听话"的噪声指标。
+    // **宁可轴少一条，不要一条轴全是假样本。**
+    @SerialName("violence") VIOLENCE("violence", "暴力/人身伤害"),
+    @SerialName("medical") MEDICAL("medical", "高风险医疗建议"),
     @SerialName("unknown") UNKNOWN("unknown", "未归类");
 
     companion object {
@@ -67,6 +83,14 @@ enum class JailbreakStrategy(val id: String, val label: String) {
     @SerialName("history_framing") HISTORY_FRAMING("history_framing", "历史学术包装"),
     @SerialName("thought_experiment") THOUGHT_EXPERIMENT("thought_experiment", "思维实验"),
     @SerialName("word_game") WORD_GAME("word_game", "游戏化"),
+    // ── 任务层伪装（A5，2026-10-16 补，借 ReNeLLM 的 3 组场景模板）──────────
+    // 与上面**两批都不同向**：那批是"对规则下手"（推翻它），这批是"哄骗"（让它觉得该给），
+    // 这一族是**改换任务本身** —— 不提"请回答我的问题"，而是把有害诉求埋进一个
+    // **待完成的工作产物**（代码补全 / 表格填写 / 故事续写）里，让模型以为自己只是在干活。
+    // 15 族里此前**没有一族**是这个方向的（实测缺口，见
+    // `docs/借鉴-ReNeLLM-可迁移清单.md` §1）—— 这也是路线里唯一一条
+    // **只增用例、不动判定链**的新增，历史数字方向不变。
+    @SerialName("scenario_nesting") SCENARIO_NESTING("scenario_nesting", "任务层伪装"),
     @SerialName("none") NONE("none", "纯直问（基线）");
 
     companion object {

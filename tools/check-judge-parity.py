@@ -52,6 +52,11 @@ KT_FILES = [
     # 或一端的段界不算断点 → 思考段里的泄露被正文豁免（假阴性）。必须机械校验。
     os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
                  "core", "judge", "CoT.kt"),
+    # B7 输出有效性：**判据的参数表**在这里（阈值全在 OutputValidity 里）。
+    # 走岔的后果比词表更隐蔽 —— 判定链不会报错，只是同一个回答在一端算 VALID、
+    # 另一端算 INVALID，于是两端的"无效条数"永远对不上。
+    os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian", "aiseclab",
+                 "core", "judge", "OutputValidity.kt"),
 ]
 
 
@@ -163,9 +168,11 @@ def py_extract(src: str, name: str, kind: str):
     if not m:
         return None
     i = m.end()
-    if kind == "int":
-        m2 = re.match(r"\d+", src[i:])
-        return int(m2.group(0)) if m2 else None
+    if kind in ("int", "float"):
+        m2 = re.match(r"\d+(?:\.\d+)?", src[i:])
+        if not m2:
+            return None
+        return int(m2.group(0)) if kind == "int" else float(m2.group(0))
     br = _first_bracket(src, i)
     if br is None:
         return None
@@ -180,9 +187,11 @@ def kt_extract(src: str, name: str, kind: str):
     if not m:
         return None
     i = m.end()
-    if kind == "int":
-        m2 = re.match(r"\d+", src[i:])
-        return int(m2.group(0)) if m2 else None
+    if kind in ("int", "float"):
+        m2 = re.match(r"\d+(?:\.\d+)?", src[i:])
+        if not m2:
+            return None
+        return int(m2.group(0)) if kind == "int" else float(m2.group(0))
     br = _first_bracket(src, i)
     if br is None:
         return None
@@ -231,6 +240,20 @@ TABLES = [
     # 段落边界在一端消失 → 该端漏判（详见 `TextNormalize.forScope` 的注释）。
     ("COT_PATTERNS", "regex"),
     ("COT_BOUNDARY_PARTS", "str"),
+    # B8 未闭合思考段：两条并行表（开 / 闭）逐条配对。走岔的后果是**一端判截断、
+    # 另一端当成正常回答** —— 于是同一份回答在两端的"无效条数"不同。
+    ("COT_OPEN_PARTS", "str"),
+    ("COT_CLOSE_PARTS", "str"),
+    # B7 输出有效性的**判据参数**（阈值表）。这些数字是"什么算坏掉的输出"的
+    # 全部可调项，两端必须逐个一致（理由见 KT_FILES 处注释）。
+    ("OUTPUT_VALIDITY_VERSION", "int"),
+    ("INVALID_MIN_ALNUM", "int"),
+    ("SINGLE_CHAR_MIN_LEN", "int"),
+    ("SINGLE_CHAR_RATIO", "float"),
+    ("REPEAT_UNIT_MAX", "int"),
+    ("REPEAT_COUNT_MIN", "int"),
+    ("REPEAT_MIN_CHARS", "int"),
+    ("REPEAT_DOMINANCE", "float"),
     ("NORMALIZE_WS_SCOPE_RE", "regex"),
     # L1 层（L1PatternRules.kt）
     ("SYSTEM_PROMPT_MARKERS", "str"),
@@ -266,6 +289,93 @@ COMBINED = [
 ]
 
 
+def check_judge_chain_shape():
+    """判定链的**形状**两端同构（不是词表，是接线）。
+
+    为什么词表全对还不够：一条判据"存在但没人调用"完全通不过词表比对。
+    B7 的输出有效性闸门就是这类 —— `output_validity` 两端写得一模一样，
+    但 `judge()` 那条链此前**没有一处问过它**，于是"不可用输出不进分母"这句话
+    在**测量**上成立、在**判定**上是假的（两端报告于是都替坏掉的模型背书）。
+
+    比四件事：
+    1. 后端 `judge()` 里闸门在 `rule_layer(` **之前**（护栏/规则层都看不到坏输出）；
+    2. 端上闸门的存在与**唯一应用点**（`ValidityGatedJudge` + `TestSession` 包一层）；
+    3. 两端的证据文案逐字一致（会进报告与导出，两边各写一份必然走岔）；
+    4. 端上不许把闸门塞进 `RuleJudge` / `GuardJudge` 内部 —— 那样每加一个 Judge 实现
+       就要记得再包一次，而**漏掉的那一个不会报错**，只会悄悄把坏输出算进分母。
+    """
+    bad = []
+    kt_judge_dir = os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian",
+                                "aiseclab", "core", "judge")
+    kt_gate = os.path.join(kt_judge_dir, "ValidityGatedJudge.kt")
+    # 证据文案的端上落点：闸门本身 + SKIPPED 的统一构造入口（文案在后者里）。
+    kt_results = os.path.join(kt_judge_dir, "JudgeResults.kt")
+    kt_session = os.path.join(ROOT, "app", "src", "main", "java", "com", "xieguojian",
+                              "aiseclab", "core", "TestSession.kt")
+
+    print()
+    print("判定链形状（闸门位置与证据文案）")
+
+    py = open(PY_FILE, encoding="utf-8").read()
+    m = re.search(r"\nasync def judge\((.*?)(?=\nasync def |\ndef |\Z)", py, re.S)
+    if not m:
+        print("  [SKIP] 后端 judge()：没找到")
+        bad.append("判定链形状")
+    else:
+        body = m.group(1)
+        i_gate, i_rule = body.find("output_validity(response)"), body.find("rule_layer(")
+        if i_gate < 0:
+            print("  [DIFF] 后端 judge() 没有过输出有效性闸门")
+            bad.append("判定链形状")
+        elif i_rule >= 0 and i_gate > i_rule:
+            print("  [DIFF] 后端闸门在 rule_layer **之后** —— 坏输出已经进了判定链")
+            bad.append("判定链形状")
+        else:
+            print("  [OK  ] 后端 judge()：闸门在 rule_layer 之前（护栏/规则层看不到坏输出）")
+
+    kt_gate_src = ""
+    if not os.path.exists(kt_gate):
+        print("  [DIFF] 端上缺 core/judge/ValidityGatedJudge.kt")
+        bad.append("判定链形状")
+    else:
+        kt_gate_src = open(kt_gate, encoding="utf-8").read()
+        if "OutputValidity.of(" in kt_gate_src:
+            print("  [OK  ] 端上 ValidityGatedJudge 存在且调 OutputValidity.of")
+        else:
+            print("  [DIFF] ValidityGatedJudge 里没有调 OutputValidity.of")
+            bad.append("判定链形状")
+
+    session = open(kt_session, encoding="utf-8").read()
+    if "ValidityGatedJudge(" not in session:
+        print("  [DIFF] TestSession 没有把 judge 包进闸门 —— 端上判定链上没有闸门")
+        bad.append("判定链形状")
+    else:
+        print("  [OK  ] 端上闸门唯一应用点 = TestSession（构造 judge 时包一层）")
+
+    leaked = []
+    for rel in ("RuleJudge.kt", os.path.join("guard", "GuardJudge.kt")):
+        p = os.path.join(kt_judge_dir, rel)
+        if os.path.exists(p) and "OutputValidity.of(" in open(p, encoding="utf-8").read():
+            leaked.append(rel)
+    if leaked:
+        print("  [DIFF] 闸门被塞进了 %s —— 应只在最外层包一次（漏掉一个实现不会报错）"
+              % "、".join(leaked))
+        bad.append("判定链形状")
+    else:
+        print("  [OK  ] 端上闸门没有下沉进 RuleJudge / GuardJudge")
+
+    for phrase in ("本条回答不构成一次正常作答", "既不算守住也不算失守"):
+        kt_all = kt_gate_src + (open(kt_results, encoding="utf-8").read()
+                                if os.path.exists(kt_results) else "")
+        if phrase not in py or phrase not in kt_all:
+            print("  [DIFF] 证据文案「%s」两端不齐" % phrase)
+            bad.append("判定链形状")
+        else:
+            print("  [OK  ] 证据文案两端一致：%s" % phrase)
+
+    return bad
+
+
 def main() -> int:
     py_src = open(PY_FILE, encoding="utf-8").read()
     kt_src = "".join(open(p, encoding="utf-8").read() for p in KT_FILES)
@@ -282,7 +392,7 @@ def main() -> int:
                                                      "有" if kv is not None else "缺"))
             bad.append(name)
             continue
-        if kind == "int":
+        if kind in ("int", "float"):
             ok = pv == kv
             print("  [%s] %-28s %s vs %s" % ("OK  " if ok else "DIFF", name, pv, kv))
             if not ok:
@@ -326,6 +436,9 @@ def main() -> int:
         print("  [DIFF] %-28s 后端=%r" % (label, py_all[:110]))
         print("         %-*s 端上=%r" % (len(label), "", kt_all[:110]))
         bad.append(label)
+
+    # ── 判定链形状：闸门必须两端都有，且都在最外层 ──
+    bad += check_judge_chain_shape()
 
     print()
     if bad:

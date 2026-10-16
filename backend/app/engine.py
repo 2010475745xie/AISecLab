@@ -9,7 +9,8 @@ from typing import Callable, List, Optional
 
 from .attack import STATIC_CASES, generate_cases, run_recursive
 from .checkpoint import fingerprint
-from .jailbreak_cases import JAILBREAK_VARIANT_CASES
+from .jailbreak_cases import COMPOSITION as JB_COMPOSITION, JAILBREAK_VARIANT_CASES
+from .benign_controls import BENIGN_CONTROL_CASES, COMPOSITION as CTL_COMPOSITION
 from .guard import SafetyGuard
 from .judge import judge
 from .llm_client import ChatClient
@@ -172,12 +173,20 @@ async def run_session(
         # 其余维度的静态用例照样跑，报告里冒出用户没勾的维度。
         cases += [c for c in STATIC_CASES if c.dimension in req.dimensions]
     if req.useJailbreakVariants and Dimension.security in req.dimensions:
-        # 越狱变体集（200 条）**全部是 security 维度**，所以勾了维度才并入 ——
-        # 用户没勾安全维度却冒出 200 条安全用例，与上面那个"未勾维度照样跑"是同一个 bug。
+        # 越狱变体集**全部是 security 维度**，所以勾了维度才并入 ——
+        # 用户没勾安全维度却冒出变体集那批安全用例，与上面那个"未勾维度照样跑"是同一个 bug。
         # 变体集不参与 attackBudget（那是 LLM 动态生成的口径），它本身就是静态用例。
         cases += JAILBREAK_VARIANT_CASES
-        logger.info("[engine] 并入越狱变体集 %d 条（20 个有害目标 × 10 类策略）",
-                    len(JAILBREAK_VARIANT_CASES))
+        # 构成说明取自 jailbreak_cases.COMPOSITION（现算），别在这里手写数字。
+        logger.info("[engine] 并入越狱变体集 %d 条（%s）",
+                    len(JAILBREAK_VARIANT_CASES), JB_COMPOSITION)
+    if req.benignControls and Dimension.security in req.dimensions:
+        # 负对照（B9，2026-10-16）：**替代**变体集，不是叠加 —— 对照组要和实验组
+        # 是同一批包装，混在一起跑会让"对照组失守率"这个数字失去意义
+        # （分母里掺进了本来该失守的有害样本，比值直接被稀释）。
+        cases = [c for c in cases if not c.id.startswith("jbv-")]
+        cases += BENIGN_CONTROL_CASES
+        logger.info("[engine] 并入负对照集 %d 条（%s）", len(BENIGN_CONTROL_CASES), CTL_COMPOSITION)
     for dim in req.dimensions:
         # attackBudget<=0 时不生成动态用例：委托运行默认只跑 50 条静态回归集（与端上对齐）。
         # 想加动态攻击（路线图"策略标签库/攻击进化"前置）就把 attackBudget 调大。

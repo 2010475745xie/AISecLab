@@ -46,10 +46,10 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     val useRecursive: StateFlow<Boolean> = _useRecursive.asStateFlow()
 
     /**
-     * 是否并入「越狱变体集」（200 条：20 个有害目标 × 10 类策略）。
+     * 是否并入「越狱变体集」（264 条：24 个有害目标 × 11 类策略）。
      *
-     * 默认关。打开后安全维度从 18 条涨到 218 条 —— 与递归对抗叠加时是最贵的一档
-     * （218 条安全用例 × 每例最多 10 轮），UI 上要把这个代价说清楚。
+     * 默认关。打开后安全维度从 18 条涨到 282 条 —— 与递归对抗叠加时是最贵的一档
+     * （282 条安全用例 × 每例最多 10 轮），UI 上要把这个代价说清楚。
      * 与 [useRecursive] 一样只在内存里，不持久化（每轮显式选择，避免上次开过、这次忘了）。
      */
     private val _useVariants = MutableStateFlow(false)
@@ -244,6 +244,19 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     private val _readyTiers = MutableStateFlow<Set<String>>(emptySet())
     val readyTiers: StateFlow<Set<String>> = _readyTiers.asStateFlow()
 
+    // ------------------------------------------------------------------
+    // 断点续测：后端上还没跑完的会话
+    //
+    // ⚠️ 这两个属性**必须声明在 `init` 之前**。Kotlin 属性按源码顺序初始化，
+    //    而 `init` 里就调了 refreshResumable()；它内部是
+    //    `viewModelScope.launch(Dispatchers.IO) { _resumable.value = ... }`，
+    //    IO 线程完全可能抢在主线程完成属性初始化之前跑到 lambda 里
+    //    ⇒ 打在 null 上抛 NPE，前台 Service 挂掉、App 冷启动即崩。
+    //    （实测：连崩 4 次，堆栈全在 TestViewModel.kt:335。曾经加在文件底部，踩过。）
+    // ------------------------------------------------------------------
+    private val _resumable = MutableStateFlow<List<BackendClient.IncompleteSession>>(emptyList())
+    val resumable: StateFlow<List<BackendClient.IncompleteSession>> = _resumable.asStateFlow()
+
     init {
         refreshReadyTiers()
         // 冷启动主动读一次磁盘历史，别让列表空着等第一次 Done
@@ -311,13 +324,6 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     fun setUseVariants(enabled: Boolean) {
         _useVariants.value = enabled
     }
-
-    // ------------------------------------------------------------------
-    // 断点续测：后端上还没跑完的会话
-    // ------------------------------------------------------------------
-
-    private val _resumable = MutableStateFlow<List<BackendClient.IncompleteSession>>(emptyList())
-    val resumable: StateFlow<List<BackendClient.IncompleteSession>> = _resumable.asStateFlow()
 
     /**
      * 拉后端上「还没跑完」的会话（断点续测入口）。

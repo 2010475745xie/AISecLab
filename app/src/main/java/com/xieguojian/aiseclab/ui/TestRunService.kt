@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.TestSession
 import com.xieguojian.aiseclab.core.engine.plannedCaseCount
+import com.xieguojian.aiseclab.core.engine.variantCaseCount
 import com.xieguojian.aiseclab.core.resolveRunMode
 import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.core.api.TokenMeter
@@ -127,7 +128,12 @@ class TestRunService : Service() {
                     appendLine("目标模型：${target.name.ifBlank { target.id }}")
                     appendLine("维度：${dims.joinToString("/") { it.label }}")
                     appendLine("递归对抗：$recursive")
-                    appendLine("越狱变体集：$variants（${if (variants) "已并入 200 条" else "未并入"}）")
+                    // 条数**必须取口径**、不能写死：写死过 200，用例集涨到 264 之后
+                    // 日志照旧念 200，用户对着 264 的实际进度看 200 —— 又一次"预告 ≠ 实际"。
+                    appendLine(
+                        "越狱变体集：$variants" +
+                            "（${if (variants) "已并入 ${variantCaseCount()} 条" else "未并入"}）"
+                    )
                     if (resumeFrom != null) {
                         appendLine("断点续测：$resumeFrom（已完成的用例直接复用、不重跑）")
                     }
@@ -159,7 +165,7 @@ class TestRunService : Service() {
                     // 条数不一致时，**必须说出原因**，别让用户对着两个数字猜。
                     // 真实发生过：后端跑的是 10-12 16:24 的冻结出包，而「越狱变体集」开关
                     // （useJailbreakVariants）是当天 23:05 才进的代码 —— 旧后端不认识这个字段，
-                    // pydantic 默认静默丢弃 → 照旧只跑 50 条。用户看到的就是"配置页 250、跑出来 50"。
+                    // pydantic 默认静默丢弃 → 照旧只跑基线 50 条，变体集一条没跑。
                     val planned = plannedCaseCount(dims, variants)
                     if (rawReport.results.size != planned) {
                         TestRunStateHolder.appendLog(

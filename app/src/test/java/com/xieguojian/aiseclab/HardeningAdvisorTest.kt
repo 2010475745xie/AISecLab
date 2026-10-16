@@ -163,7 +163,7 @@ class HardeningAdvisorTest {
     }
 
     @Test
-    fun 十五个策略族都能拿到针对性建议() {
+    fun 十六个策略族都能拿到针对性建议() {
         // 每个策略单独喂一条（一步就破），断言都拿到非空、且不是兜底文案
         JailbreakStrategy.entries.forEach { s ->
             val r = HardeningAdvisor.advise(

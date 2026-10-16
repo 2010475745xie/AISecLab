@@ -23,7 +23,7 @@ object EncodingVariants {
      * 支持造样本的编码种类 id，与 [EncodingNormalizer] 的 `detectedEncodings` 取值对应。
      *
      * **顺序即轮转顺序**：变体集按 `GOALS[i % KINDS.size]` 取种类，所以这里的顺序
-     * 决定了哪条目标用哪种编码 —— 改顺序＝改 200 条变体里的 20 条 prompt，
+     * 决定了哪条目标用哪种编码 —— 改顺序＝改整族 24 条变体的 prompt，
      * 必须与后端 `ENCODING_KINDS` **逐项同序**（`check-jailbreak-parity.py` 会比 prompt 全文）。
      */
     val KINDS: List<String> = listOf(

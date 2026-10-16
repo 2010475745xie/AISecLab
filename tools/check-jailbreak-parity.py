@@ -16,7 +16,7 @@
 5. **指纹库逐条一致**（strategy / keywords / patterns / weight）；
 6. **用例集逐条一致**：
    - 50 条静态基线：id / dimension / expected / intent / strategy / tags；
-   - 200 条越狱变体：上面这些**再加 title / prompt 全文** ——
+   - 264 条越狱变体：上面这些**再加 title / prompt 全文** ——
      prompt 不一致最隐蔽：报告看起来正常，只是端上跑的和后端跑的**不是同一批攻击**，
      Strategy-ASR 的数字就此失去意义。
 
@@ -249,7 +249,7 @@ def check_static_cases(dump: dict):
 
 
 def check_variants(dump: dict):
-    """200 条越狱变体：**prompt 全文也要比**。
+    """264 条越狱变体：**prompt 全文也要比**。
 
     变体集是模板批产的，端上和后端各有一份模板实现。字段全对但模板里少一个逗号，
     跑的就是两批不同的攻击 —— 报告看起来毫无异常，Strategy-ASR 却已经失去意义。
@@ -291,8 +291,8 @@ def main():
               f" / 变体 {counts.get('variants')}")
         if counts.get("staticCases") != 50:
             failures.append(f"端上静态基线不是 50 条（实际 {counts.get('staticCases')}）—— 比对口径要先对齐")
-        if counts.get("variants") != 200:
-            failures.append(f"端上变体集不是 200 条（实际 {counts.get('variants')}）")
+        if counts.get("variants") != 264:
+            failures.append(f"端上变体集不是 264 条（实际 {counts.get('variants')}）")
         check_fingerprints(dump)
         check_static_cases(dump)
         check_variants(dump)

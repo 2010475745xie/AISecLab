@@ -13,7 +13,7 @@
 3. `piglatin` 的**可逆性边界**（含 KDoc 里点名的两个歧义陷阱）；
 4. `unicode_tag` 的**不可见性**与**还原方向**（还原成可见字符，不是删掉），
    以及"它此前确实是缺口"（Tag 字符不在旧零宽集合里）；
-5. 变体集里编码族 **20 条**，每条还原后都命中 `overwrite` 指纹。
+5. 变体集里编码族 **24 条**，每条还原后都命中 `overwrite` 指纹。
 
 只读校验，不改任何文件。
 用法：<venv>\\Scripts\\python.exe C:\\AISecLab\\backend\\_verify_encodings.py
@@ -88,12 +88,12 @@ check("非 ASCII 原样保留", J.encode_unicode_tag("中a"), "中" + chr(J._TAG
 check("★ 缺口证据：Tag 字符不在旧零宽集合里", all(ord(c) > 0xFFFF for c in tagged), True)
 check("  且它们全部落在 U+E0000–U+E007F", all(0xE0000 <= ord(c) <= 0xE007F for c in tagged), True)
 
-# ── 4) 变体集：编码族 20 条，还原后命中 overwrite 指纹（1.2 验收本身）────
-print("\n== 4) 变体集：编码族 20 条还原后必须命中 overwrite 指纹 ==")
+# ── 4) 变体集：编码族 24 条，还原后命中 overwrite 指纹（1.2 验收本身）────
+print("\n== 4) 变体集：编码族 24 条还原后必须命中 overwrite 指纹 ==")
 cases = C.build_cases()
-check("变体集总量", len(cases), 200)
+check("变体集总量", len(cases), 264)
 enc_cases = [c for c in cases if c.encoded]
-check("编码族条数", len(enc_cases), 20)
+check("编码族条数", len(enc_cases), 24)
 kind_counts: dict[str, int] = {}
 for c in enc_cases:
     for k in J.ENCODING_KINDS:
