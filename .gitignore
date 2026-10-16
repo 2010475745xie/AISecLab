@@ -13,6 +13,15 @@ build/
 # ── Local config (SDK path etc., must not be shared) ──
 local.properties
 
+# ── Secrets ──
+# 真实密钥只存在本机 .env（由 deploy.py / start.sh 生成），绝不入库。
+# .env.example 是模板，必须留着。
+.env
+*.env
+!.env.example
+backend/.env
+backend/dist/.env
+
 # ── Packaging artifacts ──
 aiseclab-backend.zip
 /dist/

@@ -25,6 +25,21 @@ import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# ── 0) 解释器自检 ──────────────────────────────────────────────────────────
+# 本项目最低 Python 3.9。注：Rocky / RHEL 9 的系统 python3 正好是 3.9，能直接跑；
+# 想和 Docker 镜像（3.11）对齐，用 start.sh --local 让它挑一个新版解释器，
+# 或自己指定 AISECLAB_PYTHON=/usr/bin/python3.11。
+if sys.version_info < (3, 9):
+    print("[!] 需要 Python 3.9 或更高，当前是 %d.%d。" % sys.version_info[:2])
+    print("    Rocky / RHEL 系装一个 AppStream 里的新版解释器（不动系统 python3）：")
+    print("        sudo dnf install -y python3.11 python3.11-pip")
+    print("        AISECLAB_PYTHON=/usr/bin/python3.11 python3 deploy.py")
+    print("    或者干脆走 Docker：./start.sh --docker")
+    sys.exit(1)
+
+# 建 venv 用哪个解释器：优先 start.sh 挑好的（AISECLAB_PYTHON），否则就用当前这个
+BASE_PY = os.environ.get("AISECLAB_PYTHON") or sys.executable
+
 
 def step(msg):
     print("\n=== " + msg + " ===")
@@ -39,22 +54,41 @@ def run(cmd, **kw):
 VENV = os.path.join(HERE, "venv")
 if os.name == "nt":
     PY = os.path.join(VENV, "Scripts", "python.exe")
-    PIP = os.path.join(VENV, "Scripts", "pip.exe")
 else:
     PY = os.path.join(VENV, "bin", "python")
-    PIP = os.path.join(VENV, "bin", "pip")
+# 一律用「venv 自己的 python -m pip」，不直接调 pip / pip.exe：
+# 一是不依赖 Scripts|bin 下那个启动器（Linux 上它的 shebang 指向建 venv 时的绝对路径，
+# 目录一搬就废），二是 Windows 上 pip.exe 在某些代理/长路径环境下会自己起不来。
+PIP = [PY, "-m", "pip"]
 
 if not os.path.isfile(PY):
     step("创建虚拟环境")
-    run([sys.executable, "-m", "venv", VENV])
+    rc = run([BASE_PY, "-m", "venv", VENV]).returncode
+    if rc != 0 or not os.path.isfile(PY):
+        print("\n[!] 创建虚拟环境失败。")
+        if os.name != "nt":
+            print("    Rocky / RHEL / Fedora 系最常见的原因：ensurepip 缺失 —— 先执行：")
+            print("        sudo dnf install -y python3-pip")
+            print("    Rocky 9 也可直接装一个新版解释器（不会动系统 python3）：")
+            print("        sudo dnf install -y python3.11 python3.11-pip")
+            print("        AISECLAB_PYTHON=/usr/bin/python3.11 ./start.sh --local")
+            print("    Debian / Ubuntu 系：sudo apt update && sudo apt install -y python3-venv")
+            print("    或者干脆改用 Docker 部署（见 README 第 0 节）。")
+        else:
+            print("    Windows 常见原因：Python 未加入 PATH，或安装时未勾选 pip / venv 组件。")
+        sys.exit(1)
 
 # ── 2) 安装依赖 ────────────────────────────────────────────────
 step("安装依赖")
 try:
-    subprocess.run([PIP, "show", "fastapi"], check=True, capture_output=True)
+    subprocess.run(PIP + ["show", "fastapi"], check=True, capture_output=True)
     print("依赖已安装，跳过。")
 except subprocess.CalledProcessError:
-    run([PIP, "install", "-r", os.path.join(HERE, "requirements.txt"), "--upgrade"])
+    req = os.path.join(HERE, "requirements.txt")
+    if run(PIP + ["install", "-r", req, "--upgrade"]).returncode != 0:
+        print("\n[!] 依赖安装失败。若在国内网络，先试镜像源：")
+        print("    {} -m pip install -r {} -i https://pypi.tuna.tsinghua.edu.cn/simple".format(PY, req))
+        sys.exit(1)
 
 # ── 3) .env ───────────────────────────────────────────────────
 if not os.path.exists(os.path.join(HERE, ".env")):
@@ -196,7 +230,9 @@ if len(ips) > 1:
     print("  提示：手机和电脑要在同一个 Wi-Fi/局域网；")
     print("        若电脑开着 VPN，优先用上面的私网地址，并确认 VPN 没有阻断局域网入站。")
 print("=" * 60)
-print("  按 Ctrl+C 停止服务。\n")
+print("  停止：Ctrl+C（或在另一个终端执行 ./stop.sh）")
+print("  提示：服务器 / 比赛评审环境建议走 Docker —— ./start.sh --docker")
+print("=" * 60 + "\n")
 
 try:
     proc.wait()

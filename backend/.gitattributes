@@ -1,3 +1,9 @@
 # Windows 批处理必须保持 CRLF，否则双击运行可能解析失败
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Shell 脚本必须保持 LF。
+# ⚠️ 若 checkout 时被转成 CRLF，Linux 上会报
+#    "/usr/bin/env: 'bash\r': No such file or directory"
+#    —— 评审环境是 Ubuntu，这条必须锁死。
+*.sh text eol=lf

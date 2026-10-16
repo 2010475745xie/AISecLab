@@ -1,12 +1,21 @@
-# AISecLab 后端 —— 比赛 / 自托管一键部署
+# AISecLab 后端 —— 一键部署（Docker）
 #
+# 基准环境：Rocky Linux 9.2（x86_64）+ Docker 24+ / Compose v2
 # 用法：
-#   1) 复制 .env.example 为 .env，填入裁判模型配置（JUDGE_BASE_URL / JUDGE_MODEL / JUDGE_API_KEY）
-#   2) docker compose up -d --build
-#   3) 健康检查：docker compose ps 或 curl http://localhost:8000/health
+#   1) cp .env.example .env        # 填 JUDGE_* 可选；不填也能起服务
+#   2) ./start.sh                  # 等价于 docker compose up -d --build，并等 /health 通过
+#   3) 健康检查：docker compose ps（STATUS 应为 healthy）或 curl http://localhost:8000/health
+# 停止：./stop.sh  或  docker compose down
 #
-# 改对外端口：把左边 "${PORT:-8000}:8000" 改成你想要的，例如 "80:8000"。
-# 加鉴权：在 .env 里设置 API_TOKEN，除 /health 外的接口都需 Authorization: Bearer <token>。
+# 端口：对外端口取 .env 里的 PORT（默认 8000）。评审 / 生产建议 8000 / 8080 / 3000，避开 80 / 443。
+# 鉴权：在 .env 里设 API_TOKEN，除 /health 外所有接口都需 Authorization: Bearer <token>。
+#
+# ⚠️ Rocky / RHEL 系两个通用坑，这里已经处理好了，别删：
+#   1) SELinux：宿主的 firewalld + SELinux 默认都是开的。绑定挂载若不带标签，
+#      容器内会 EACCES / Permission denied 读不到挂载目录 ⇒ 卷必须带 `:z`（见下面 volumes）。
+#      `:z` 在 Debian / Ubuntu / Docker Desktop 上会被忽略，加上不影响其他平台。
+#   2) firewalld：端口放行要手动做，否则宿主机自己 curl 得通、外部一律不通：
+#      sudo firewall-cmd --permanent --add-port=8000/tcp && sudo firewall-cmd --reload
 
 services:
   aiseclab-backend:
@@ -24,14 +33,13 @@ services:
       PORT: "8000"
     restart: unless-stopped
     volumes:
-      - ./data:/app/data   # 持久化目录（当前后端为内存态，预留给报告落盘）
-    healthcheck:
-      test: ['CMD', 'python', '-c', 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("http://127.0.0.1:8000/health").status==200 else 1)']
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      # `:z` = SELinux 共享标签（Rocky/RHEL 必需，其他平台忽略）。
+      # 当前后端报告存在内存态（sessions dict，重启即失），这个卷是预留给报告落盘用的 ——
+      # 挂上不影响现有行为。
+      - ./data:/app/data:z
+    # 健康检查定义在 Dockerfile 的 HEALTHCHECK 里（唯一实现），此处刻意不重复写。
     deploy:
       resources:
         limits:
           memory: 512M   # 单用户红队测试足够；若 OOM 调到 1G
+          # 若你的引擎忽略 deploy.limits（很老的 compose），可改用顶层：mem_limit: 512m
