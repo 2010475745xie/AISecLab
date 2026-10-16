@@ -177,7 +177,12 @@ class TestRunService : Service() {
                     }
                     // 本轮账单：跑完就落进报告，历史报告翻出来也能看到当时花了多少。
                     // 委托后端的这一路也拿得到 —— SSE 每帧都带累计用量，TokenMeter 已经接住了。
-                    val report = rawReport.copy(tokenUsage = TokenMeter.state.value.toTokenUsage())
+                    // 用时与测试页那个实时计时**同源**（起点落在 TestRunStateHolder.beginRun 里），
+                    // 所以跑完那一刻屏幕上的数字与报告里的一致。
+                    val report = rawReport.copy(
+                        tokenUsage = TokenMeter.state.value.toTokenUsage(),
+                        elapsedMs = TestRunStateHolder.elapsedMs()
+                    )
                     // 存进历史记录（apiKey 抹零在 HistoryRepository 内做）；存档失败不影响本轮结果展示
                     runCatching { HistoryRepository(applicationContext).save(report) }
                     TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
@@ -229,7 +234,11 @@ class TestRunService : Service() {
                 )
                 // 本轮账单：跑完就落进报告，历史报告翻出来也能看到当时花了多少
                 //（跑的时候界面上那行实时计数只在当下看得到）。
-                val report = rawReport.copy(tokenUsage = TokenMeter.state.value.toTokenUsage())
+                // 用时同上：与测试页的实时计时同源。
+                val report = rawReport.copy(
+                    tokenUsage = TokenMeter.state.value.toTokenUsage(),
+                    elapsedMs = TestRunStateHolder.elapsedMs()
+                )
                 // 存进历史记录（apiKey 抹零在 HistoryRepository 内做）；存档失败不影响本轮结果展示
                 runCatching { HistoryRepository(applicationContext).save(report) }
                 TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")

@@ -1,5 +1,6 @@
 package com.xieguojian.aiseclab.ui.screens
 
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,7 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.xieguojian.aiseclab.core.api.TokenMeter
+import com.xieguojian.aiseclab.core.model.formatElapsed
+import com.xieguojian.aiseclab.ui.TestRunStateHolder
 import com.xieguojian.aiseclab.ui.TestViewModel
+import kotlinx.coroutines.delay
 
 /**
  * 测试运行页：顶部进度条 + 下方「类终端」窗口实时显示测试进程信息（[TestViewModel.testLog]）。
@@ -61,6 +66,37 @@ fun RunScreen(
     // 新日志进来时自动滚到最底（用 snapshot，避免 items 还没重组完滚不到）
     LaunchedEffect(log.size) {
         if (log.isNotEmpty()) listState.animateScrollToItem(log.lastIndex)
+    }
+
+    // ── 本轮耗时：从服务开始准备起算，跑的时候每秒跳一次 ──
+    // 起点取自 [TestRunStateHolder]（服务在 beginRun 里落的那个），与报告里的最终数字**同源**
+    // —— 各记各的必然差一截（准备阶段算不算、谁先谁后），用户看到"跑的时候 42 秒、
+    // 报告里 39 秒"只会怀疑程序在编。
+    //
+    // 它不是 State、读它不会触发重组，这**没关系**：起点只在"开始"与"重置"两个时刻变，
+    // 而这两个时刻服务都会紧接着推一次 `TestRunStateHolder.state`（Running(0,0) / Idle），
+    // 本屏订阅了那个 flow，所以每次起点变化必然跟着一次重组 —— 不会读到陈旧值。
+    val startedAt = TestRunStateHolder.startedAtElapsedMs
+    val running = state is TestViewModel.TestState.Running
+    var nowElapsed by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    // ⚠️ key 必须是 `running`（布尔）而**不能**是 `state`：`Running(completed, total)` 是
+    // data class，每跑完一条用例就是一个新实例 —— 用它做 key，这个协程会在每次进度刷新时
+    // 被取消重建，循环永远走不到 `delay` 之后，界面上表现为「耗时卡着不动」。
+    // 用布尔做 key 则只在"跑完/出错"那一刻重启一次，循环体自然退出。
+    LaunchedEffect(startedAt, running) {
+        while (running) {
+            nowElapsed = SystemClock.elapsedRealtime()
+            delay(500)   // 0.5s 而不是 1s：整秒刻度下这样不会出现"跳了 2 秒"的观感
+        }
+        nowElapsed = SystemClock.elapsedRealtime()   // 停下时收尾取一次，冻结在最终值
+    }
+    val elapsedText: String? = when (val s = state) {
+        // 跑完/出错后以**报告里落盘的数字**为准（两者同源，但报告那个是唯一的存档口径）；
+        // 拿不到（旧报告 / 还没挂上）才退回实时值。
+        is TestViewModel.TestState.Done ->
+            s.report.elapsedMs?.let { formatElapsed(it) }
+                ?: startedAt?.let { formatElapsed(nowElapsed - it) }
+        else -> startedAt?.let { formatElapsed(nowElapsed - it) }
     }
 
     val title = when (state) {
@@ -105,6 +141,18 @@ fun RunScreen(
                 else -> {
                     LinearProgressIndicator(progress = { 0f }, modifier = Modifier.fillMaxWidth())
                 }
+            }
+
+            // ── 本轮耗时：实时跳秒 ──
+            // 放在状态分支之外，Running / Done / Error 都看得到 —— 出错时"跑了多久才出错"
+            // 和"烧了多少 token"是同一类信息，都要能当场看到。
+            // 文案格式走 `core/model/Report.kt::formatElapsed`（与报告页同一个函数）。
+            elapsedText?.let { txt ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "耗时：$txt",
+                    style = MaterialTheme.typography.bodyMedium
+                )
             }
 
             // ── token 消耗：本轮累计，随每次模型调用实时增长 ──
@@ -182,12 +230,14 @@ fun RunScreen(
     // 停止确认：说清楚"已完成多少条会被丢弃"和"已经烧了多少 token"，
     // 这两个数字才是用户真正在权衡的东西。
     if (confirmStop) {
-        val running = state as? TestViewModel.TestState.Running
+        // 名字别写 `running`：本函数上方已有一个同名的布尔（是否正在跑），
+        // 撞名会报 "Name shadowed"，而且这个是真·Running 状态、那个是布尔，读起来极易混。
+        val runningState = state as? TestViewModel.TestState.Running
         AlertDialog(
             onDismissRequest = { confirmStop = false },
             title = { Text("停止本轮测试？") },
             text = {
-                val done = running?.let { "已完成 ${it.completed} / ${it.total} 条，这些结果会一并丢弃。" }
+                val done = runningState?.let { "已完成 ${it.completed} / ${it.total} 条，这些结果会一并丢弃。" }
                     ?: "本轮结果会被丢弃。"
                 val spent = tokens.summary()?.let { "\n\n已消耗 $it。" }.orEmpty()
                 Text(done + spent + "\n\n不会生成报告，也无法恢复。")

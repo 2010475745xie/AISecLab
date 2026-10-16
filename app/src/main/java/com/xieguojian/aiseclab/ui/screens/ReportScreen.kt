@@ -36,6 +36,7 @@ import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.tokenSpendLine
 import com.xieguojian.aiseclab.core.model.resumeNote
+import com.xieguojian.aiseclab.core.model.elapsedLine
 import com.xieguojian.aiseclab.core.model.TestResult
 import com.xieguojian.aiseclab.core.model.Verdict
 import com.xieguojian.aiseclab.core.report.ReportDiff
@@ -329,6 +330,19 @@ fun ReportScreen(
                     color = MaterialTheme.colorScheme.primary
                 )
             }
+            // ── 本轮用时 ──
+            // 口径 = **从开始准备到出报告**的墙钟时间，**不是**各用例 latencyMs 的和 ——
+            // 用例是并发跑的，加起来会远大于墙钟，拿它当"跑了多久"是错的。
+            // 放在「本次消耗」这一节里：token 与时间都是这一轮的代价，读者要能一起看到。
+            // 文案唯一源 = Report.elapsedLine()（报告页 / Markdown / HTML 三处同源）；
+            // 没有记录时它说「未记录」而不是 0 秒（「没记时间」≠「一瞬间跑完」）。
+            Spacer(Modifier.height(6.dp))
+            Text(
+                report.elapsedLine(),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (report.elapsedMs == null) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onSurface
+            )
         }
 
         // ── 复现性档：报告必须自证"别人照着重跑能不能得到同一份结论" ──

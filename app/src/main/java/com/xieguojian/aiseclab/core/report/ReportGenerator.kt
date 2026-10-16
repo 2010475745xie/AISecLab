@@ -6,6 +6,7 @@ import com.xieguojian.aiseclab.core.model.Report
 import com.xieguojian.aiseclab.core.model.RiskLevel
 import com.xieguojian.aiseclab.core.model.tokenSpendLine
 import com.xieguojian.aiseclab.core.model.resumeNote
+import com.xieguojian.aiseclab.core.model.elapsedLine
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,6 +68,9 @@ object ReportGenerator {
         // 断点续测自证：这份报告里哪些条不是本轮跑的（没有复用时 resumeNote() 是空串，不写这一行）。
         // 文案唯一源 = Report.resumeNote()（报告页 / Markdown / HTML 三处同源）。
         report.resumeNote().takeIf { it.isNotEmpty() }?.let { append("${it}\n\n") }
+        // 本轮用时。文案唯一源 = Report.elapsedLine()（报告页 / Markdown / HTML 三处同源）。
+        // 与 token 同属「这一轮的代价」，放在同一节里；没有记录时它说「未记录」而不是 0 秒。
+        append("${report.elapsedLine()}\n\n")
         // 复现性档：报告自证"别人照着重跑能不能得到同一份结论"。
         // 文案唯一源 = core/report/ReproNote.kt（报告页 / Markdown / HTML 三处同源）。
         append("## 复现性\n\n${report.reproLine()}\n\n")
@@ -368,6 +372,8 @@ object ReportGenerator {
         // 没有复用时是空串 → 不写这一段（别写"复用 0 条"）。
         report.resumeNote().takeIf { it.isNotEmpty() }
             ?.let { append("<p>${escapeHtml(it)}</p>") }
+        // 本轮用时：文案唯一源 = Report.elapsedLine()（与报告页 / Markdown 同源）。
+        append("<p>${escapeHtml(report.elapsedLine())}</p>")
         // 复现性档（文案唯一源 = core/report/ReproNote.kt，与报告页 / Markdown 同源）。
         append("<h2>复现性</h2><p>${escapeHtml(report.reproLine())}</p>")
         // 外部对照（B4）：文案唯一源 = core/report/ExternalNote.kt，与报告页 / Markdown 同源。

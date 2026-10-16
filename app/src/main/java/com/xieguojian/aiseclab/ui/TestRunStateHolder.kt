@@ -1,6 +1,7 @@
 package com.xieguojian.aiseclab.ui
 
 import android.content.Context
+import android.os.SystemClock
 import com.xieguojian.aiseclab.core.model.Report
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +38,32 @@ object TestRunStateHolder {
     /** 单轮日志上限，超过从头部丢弃最旧行（防止极端长跑把内存撑爆）。 */
     private const val MAX_LOG_LINES = 2000
 
+    /**
+     * 本轮的**起点**：单调时钟毫秒（`SystemClock.elapsedRealtime()`）。null = 当前没在跑。
+     *
+     * 为什么起点记在这里、而不是测试页和报告各记一个：两边必须是同一个数。
+     * 测试页每秒刷新的实时耗时和报告里那个最终数字若各自起算，结果必然差一截
+     * （准备阶段算不算、谁先谁后），用户看到"跑的时候 42 秒、报告里 39 秒"只会怀疑程序。
+     *
+     * 用 `elapsedRealtime` 而不是 `currentTimeMillis`：后者是壁钟，会被系统对时 / 用户改时间
+     * 跳变 —— 算出一个负的或者几小时的"用时"比不显示更糟。
+     *
+     * `@Volatile`：起点在服务主线程（`onStartCommand` → [beginRun]）落，用时在 IO 线程
+     * （测试协程里）读。
+     */
+    @Volatile
+    private var startedAtMs: Long? = null
+
+    /** 本轮起点（单调时钟毫秒）。测试页据此算实时耗时；还没开始 → null。 */
+    val startedAtElapsedMs: Long?
+        get() = startedAtMs
+
+    /**
+     * 本轮**已用时**（毫秒）。还没开始 → **null，不是 0**
+     * （「没开始」和「一毫秒就跑完了」是两回事 —— 与本项目「没采集 ≠ 很差」同源）。
+     */
+    fun elapsedMs(): Long? = startedAtMs?.let { SystemClock.elapsedRealtime() - it }
+
     // ── 文件日志：把每轮测试的终端日志 + 报告 JSON 落盘到应用外部文件夹（无需任何权限）──
     // 路径：/storage/emulated/0/Android/data/com.xieguojian.aiseclab/files/logs/aiseclab_run_<ts>.log
     // 用户可在「文件管理」直接访问，便于事后审计 / 排查。所有 IO 全部 runCatching 吞异常，
@@ -55,6 +82,8 @@ object TestRunStateHolder {
      * [header] 由调用方填上模式 / 模型 / 维度等关键元信息。
      */
     fun beginRun(context: Context, header: String) {
+        // 起点**先落**，再去做建文件这种会失败的活：计时不该因为日志文件建不出来就整个丢掉。
+        startedAtMs = SystemClock.elapsedRealtime()
         runCatching {
             val dir = File(context.getExternalFilesDir(null), "logs").apply { if (!exists()) mkdirs() }
             val ts = System.currentTimeMillis()
@@ -123,6 +152,9 @@ object TestRunStateHolder {
             }
         }
         closeRunLog()
+        // 起点也清掉：中断后没有"本轮已用时"这个概念了，留着会让下一次渲染读到一个陈旧值。
+        // （正常跑完**不清** —— 测试页在 Done 态还要用兜底显示，直到下一轮 beginRun 覆盖。）
+        startedAtMs = null
         _state.value = TestViewModel.TestState.Idle
         _log.value = emptyList()
     }
