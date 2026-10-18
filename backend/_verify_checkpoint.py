@@ -12,6 +12,7 @@
   C. 引擎：**单条用例失败不再掀翻整轮**（全失败也要产出报告，且全部记为 SKIPPED 不是 PASS）
   D. 引擎：指纹命中 → **不重跑**（复用条的 verdict 原样保留），进度行说的是"续跑复用"
   E. 接线：`main._run` 逐条落盘 → 终态 done；resumeFrom 的 404/409 守卫；复用条数进报告自证
+  G. **集合不一致 → 拒绝本轮、检查点逐字节不变**（2026-10-16 静默丢 79 条结果的回归测试）
 """
 from __future__ import annotations
 
@@ -134,10 +135,11 @@ def test_store() -> None:
 # ── C/D. 引擎 ─────────────────────────────────────────────────────────────
 async def _run_engine(reuse=None):
     jc, ac = ChatClient(DEAD), ChatClient(DEAD)
-    done, plan, msgs = [], [], []
+    done, plan, msgs, resumed_seen = [], [], [], []
 
-    async def on_progress(n, total, dim, tokens=None, message=None):
+    async def on_progress(n, total, dim, tokens=None, message=None, resumed=None):
         msgs.append(message or "")
+        resumed_seen.append(resumed or 0)
 
     try:
         report = await run_session(
@@ -149,12 +151,12 @@ async def _run_engine(reuse=None):
     finally:
         await jc.close()
         await ac.close()
-    return report, done, plan, msgs
+    return report, done, plan, msgs, resumed_seen
 
 
 def test_engine() -> None:
     print("\n[C] 引擎：单条失败不掀翻整轮 / [D] 复用不重跑")
-    report, done, plan, msgs = asyncio.run(_run_engine())
+    report, done, plan, msgs, resumed_seen = asyncio.run(_run_engine())
     check("on_plan 收到用例集合", len(plan) == 1 and len(plan[0]) == 10,
           "plan=%s" % (len(plan[0]) if plan else None))
     check("死端点下**照样产出报告**（不再整轮 error）", report is not None)
@@ -166,6 +168,8 @@ def test_engine() -> None:
     check("每条都回调过 on_case_done", len(done) == 10, "len=%d" % len(done))
     check("全新一轮 resumedCount=0", report.resumedCount == 0)
     check("失败行也说清了原因", any("执行失败" in m for m in msgs))
+    check("全新一轮的 progress 都报 resumed=0（不虚报复用）",
+          len(resumed_seen) == 10 and all(r == 0 for r in resumed_seen), str(resumed_seen))
 
     # ── D. 拿前 3 条当"上次已跑完"，并给它们一个**不可能由死端点产生**的结论 ──
     reuse = {}
@@ -177,7 +181,7 @@ def test_engine() -> None:
             }),
             "response": "[verify] 上轮的回答",
         })
-    report2, done2, _, msgs2 = asyncio.run(_run_engine(reuse=reuse))
+    report2, done2, _, msgs2, resumed_seen2 = asyncio.run(_run_engine(reuse=reuse))
     kept = [r for r in report2.results
             if r.judgeResult.evidence[:1] == ["[verify] 这条来自检查点"]]
     check("复用的 3 条保留原结论（没被重跑覆盖成 SKIPPED）", len(kept) == 3, "kept=%d" % len(kept))
@@ -190,6 +194,10 @@ def test_engine() -> None:
           sum(1 for m in msgs2 if "续跑复用" in m) == 3,
           "命中=%d" % sum(1 for m in msgs2 if "续跑复用" in m))
     check("复用行不含输入/回答（不刷屏）", all(("输入：" not in m) for m in msgs2 if "续跑复用" in m))
+    check("续跑的 progress 上报的累计复用数单调递增到 3",
+          resumed_seen2 == sorted(resumed_seen2) and max(resumed_seen2) == 3, str(resumed_seen2))
+    check("续跑最后一条也报 3（界面才能显示「复用 3 / 新跑 7」）",
+          resumed_seen2[-1] == 3, str(resumed_seen2[-1]))
 
 
 # ── E. main 接线 ──────────────────────────────────────────────────────────
@@ -266,10 +274,17 @@ def test_wiring() -> None:
         check("续跑后 10 条全部复用", rep.resumedCount == 10, str(rep.resumedCount))
         check("续跑后总数仍是 10（没跑成 20）", len(rep.results) == 10)
         check("终态回到 done", main.STORE.load(sid).state == DONE)
-        events = []
+        events, payloads = [], []
         while not q.empty():
-            events.append(json.loads(q.get_nowait())["event"])
+            ev = q.get_nowait()          # 队列里是 dict（序列化在 stream() 里统一做）
+            events.append(ev["event"])
+            payloads.append(ev)
         check("最后一条 SSE 是 done", events and events[-1] == "done", str(events[-3:]))
+        prog = [p for p in payloads if p["event"] == "progress"]
+        check("SSE 的 progress 事件带 resumed 字段（端上才能显示复用/新跑）",
+              bool(prog) and all("resumed" in p for p in prog), str(prog[:1]))
+        check("续跑末尾 SSE 报 resumed=10", prog and prog[-1]["resumed"] == 10,
+              str(prog[-1]["resumed"] if prog else None))
 
         # 最坏情况：用例全都跑完了，**收尾那一步才炸**。这里用"会话没登记"制造一个确定性异常
         #（`sessions[sid]["report"] = report` → KeyError）—— 要证的正是：那些已经落盘的结果
@@ -284,6 +299,96 @@ def test_wiring() -> None:
               "completed=%s" % (cpb.completed if cpb else None))
         check("failed 会话仍在可续跑列表里",
               "bad" in [c.sid for c in main.STORE.list_incomplete()])
+    finally:
+        main.STORE, main.sessions = old_store, old_sessions
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── G. 集合不一致 → 拒绝，且绝不删除检查点数据（2026-10-16 丢 79 条的回归）──
+def test_no_silent_purge() -> None:
+    """这条测试守着一次**真实的、不可逆的数据丢失**。
+
+    2026-10-16 实况：用户全勾（314 条）跑到 170+ 时断流，续跑时**漏勾了「越狱变体集」**
+    （默认关、且续跑界面不一定显式提示），本轮集合只有 50 条 —— 旧实现的 `on_plan`
+    把"不在本轮集合里"的 79 条已跑完结果**直接 pop 掉并落盘**，报告显示"共 50 条"，
+    那 79 条再也回不来了。所以这里断言的不是"报错文案好看"，而是
+    **检查点内容逐字节不变**。
+    """
+    print("\n[G] 续跑集合不一致：拒绝本轮、检查点原样保留")
+    tmp = tempfile.mkdtemp(prefix="aiseclab-purge-")
+    old_store, old_sessions = main.STORE, main.sessions
+    try:
+        main.STORE = CheckpointStore(tmp)
+        main.sessions = {}
+        sid = "purge-1"
+
+        # 前置：正常跑完一轮（factuality 静态集 10 条）→ 拿到 10 个**真实**指纹
+        main.sessions[sid] = {"queue": asyncio.Queue(), "report": None, "running": True}
+        asyncio.run(main._run(sid, _req(), asyncio.Queue()))
+        cp = main.STORE.load(sid)
+        check("前置：第一轮落盘 10 条", cp.completed == 10, "completed=%d" % cp.completed)
+        sample = cp.results[list(cp.results)[0]]
+
+        # 再模拟"上一轮跑过越狱变体集"：塞 3 条**本轮集合里不存在**的结果
+        injected = ["beef%012d" % i for i in range(3)]
+        for fp in injected:
+            cp.results[fp] = dict(sample)
+        cp.state = INTERRUPTED
+        main.STORE.save(cp)
+        check("前置：检查点里现在 13 条", main.STORE.load(sid).completed == 13)
+        before = json.dumps(main.STORE.load(sid).results, sort_keys=True)
+
+        # 续跑：本轮只有 10 条（≙ 用户漏勾了越狱变体集）
+        main.sessions[sid] = {"queue": asyncio.Queue(), "report": None, "running": True}
+        q = asyncio.Queue()
+        asyncio.run(main._run(sid, _req(resumeFrom=sid), q))
+
+        after = main.STORE.load(sid)
+        check("整轮被判 failed（而不是「成功了但其实少了 3 条」）",
+              after.state == "failed", after.state)
+        err = after.error or ""
+        check("失败原因说清了「本轮几条 / 检查点几条 / 会丢几条」",
+              "本轮用例数" in err and "检查点已完成" in err and "3 条" in err, repr(err[:120]))
+        check("失败原因给了可操作的出路（勾回开关 or 新建一轮）",
+              "越狱变体集" in err and "新建一轮" in err)
+        check("★ 检查点 13 条一条都没被删", after.completed == 13,
+              "completed=%d" % after.completed)
+        check("★ 检查点内容逐字节不变（没有偷偷改过）",
+              json.dumps(after.results, sort_keys=True) == before)
+        check("没产出报告（拒绝得彻底，不产生半真半假的报告）",
+              main.sessions[sid]["report"] is None)
+        events = []
+        while not q.empty():
+            events.append(q.get_nowait()["event"])
+        check("SSE 回的是 error 事件（端上会立刻看到，而不是干等）",
+              events and events[-1] == "error", str(events))
+        check("failed 会话仍可续跑（改回配置就能接着跑）",
+              sid in [c.sid for c in main.STORE.list_incomplete()])
+
+        # 反证 ①：把不匹配的 3 条删掉（≙ 用户改回原配置）→ 必须能正常续跑，且全复用
+        cp2 = main.STORE.load(sid)
+        for fp in injected:
+            cp2.results.pop(fp, None)
+        main.STORE.save(cp2)
+        main.sessions[sid] = {"queue": asyncio.Queue(), "report": None, "running": True}
+        asyncio.run(main._run(sid, _req(), asyncio.Queue()))
+        rep = main.sessions[sid]["report"]
+        check("配置改回一致后能正常续跑", rep is not None and main.STORE.load(sid).state == DONE)
+        check("复用 10 条、一个模型调用都没发", rep is not None and rep.resumedCount == 10,
+              str(rep.resumedCount if rep else None))
+
+        # 反证 ②：本轮集合是**超集**（多勾一个维度）时必须放行 —— 只增不减，没有任何数据会丢，
+        # 拦下来就是过度拦截（用户正常"续跑时加一个维度"会被挡住，体验更差）。
+        main.sessions[sid] = {"queue": asyncio.Queue(), "report": None, "running": True}
+        asyncio.run(main._run(
+            sid, _req(dimensions=[Dimension.factuality, Dimension.security]),
+            asyncio.Queue()))
+        cp3 = main.STORE.load(sid)
+        check("本轮是超集（多勾一维）→ 放行，不误拒",
+              cp3.state == DONE and "不一致" not in (cp3.error or ""),
+              "state=%s err=%s" % (cp3.state, (cp3.error or "")[:60]))
+        check("超集跑完后旧结果仍在（只增不减）", cp3.completed >= 10,
+              "completed=%d" % cp3.completed)
     finally:
         main.STORE, main.sessions = old_store, old_sessions
         shutil.rmtree(tmp, ignore_errors=True)
@@ -317,6 +422,7 @@ if __name__ == "__main__":
     test_store()
     test_engine()
     test_wiring()
+    test_no_silent_purge()
     test_contract()
     print("\n%s\n通过 %d / 失败 %d" % ("=" * 46, _ok, _bad))
     sys.exit(1 if _bad else 0)

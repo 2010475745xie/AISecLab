@@ -28,6 +28,15 @@ class AttackEngine(
         // 跑得慢比跑得浅更伤（样本量直接决定结论可信度）。
         maxConcurrency: Int = 4,
         onProgress: suspend (completed: Int, total: Int) -> Unit = { _, _ -> },
+        /**
+         * **显示用的总条数**。默认 = 本批次的条数（整轮一次跑完时就是对的）。
+         *
+         * 递归对抗开启时用例会被拆成两批（非安全维度并发 + 安全维度串行），
+         * 本批次只是其中一部分；此时必须传入**全局**条数，否则界面与终端行会显示
+         * `#1/32`（而这一轮其实要跑 314 条）—— 2026-10-17 用户报的"条数不对"就是它。
+         * 见 [ProgressPlumbing.kt] 的说明。
+         */
+        displayTotal: Int = cases.size,
         onLog: ((String) -> Unit)? = null
     ): List<TestResult> {
         if (cases.isEmpty()) return emptyList()
@@ -35,7 +44,10 @@ class AttackEngine(
         val results = mutableListOf<TestResult>()
         val lock = Any()
         var completed = 0
-        val total = cases.size
+        // ⚠️ 进度与终端行都用这一个 `total`：漏改一处就会出现"进度条按 314 走、
+        //    终端里按 32 打"的自相矛盾（比两边都错更难查）。
+        //    递归分支里本批次是**第一批**（非安全维度），所以 completed 从 0 起算。
+        val total = if (displayTotal > 0) displayTotal else cases.size
 
         coroutineScope {
             cases.map { case ->

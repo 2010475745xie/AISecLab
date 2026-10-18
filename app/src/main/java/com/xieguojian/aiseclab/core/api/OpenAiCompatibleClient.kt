@@ -130,5 +130,14 @@ class OpenAiCompatibleClient(
     }
 }
 
-/** status = HTTP 状态码（网络层异常时为 null），供调用方判断是否可重试（429/5xx）。 */
-class ApiException(message: String, val status: Int? = null) : Exception(message)
+/**
+ * status = HTTP 状态码（网络层异常时为 null），供调用方判断是否可重试（429/5xx）。
+ *
+ * [cause] 是可选的底层异常（如 `SocketTimeoutException`）：报错文案面向用户，
+ * 但排查时得能顺着 cause 看到真正是谁抛的（读超时 / 连接重置 / 取消）。2026-10-16 加。
+ */
+class ApiException(
+    message: String,
+    val status: Int? = null,
+    cause: Throwable? = null
+) : Exception(message, cause)

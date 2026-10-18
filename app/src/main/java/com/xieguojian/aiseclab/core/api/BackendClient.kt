@@ -8,11 +8,20 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
+
+/**
+ * SSE 空闲读超时（秒）。见 [BackendClient] 里 `http` 的注释：
+ * 后端每 15s 发一个 `: keepalive` 心跳，所以"60 秒一个字节都没有"只可能是连接真的断了。
+ */
+private const val SSE_IDLE_TIMEOUT_SECONDS = 60L
 
 /**
  * 后端代理客户端：把一轮完整测试委托给 AISecLab 后端（FastAPI），
@@ -37,12 +46,48 @@ class BackendClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    // SSE 可能跑很久：关掉读超时（连接超时保留），靠流结束/异常释放。
+    /**
+     * SSE 的**空闲读超时**：多久收不到任何字节（含后端每 15s 一次的 `: keepalive` 心跳）就判连接已死。
+     *
+     * 这里以前是 `0`（永不过时），注释理由是"SSE 可能跑很久"。代价是**永远发现不了断线**：
+     * 后端被杀 / 手机切网 / NAT 悄悄回收连接时，端上一直阻塞在 `readUtf8Line()`，
+     * 不报错、不重试、不提示 —— 界面就那样停在某个数字上。2026-10-16 实测：
+     * 22:42 之后整整 25 分钟零输出，UI 卡在 111/314，用户唯一能做的是手动点停止。
+     *
+     * 取 60s = 心跳间隔（后端 `main.HEARTBEAT_SECONDS = 15`）的 4 倍：
+     * 单条用例跑一两分钟不出事件是完全正常的（等被测模型出完整回答 + 裁判裁决），
+     * 但**心跳不会停**，所以正常长跑不会误触发；真断了最多 1 分钟就报错。
+     * 注意 OkHttp 的 readTimeout 是"两次读取之间的间隔上限"，不是整轮总时长上限 ——
+     * 只要心跳还在，跑两小时也不会超时。
+     */
     private val http = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS)
+        .readTimeout(SSE_IDLE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    /**
+     * 当前正在进行的调用（进度流订阅）。
+     *
+     * 用来让「停止」**真正生效**：`TestRunService.stopRun()` 只做 `scope.cancel()`，
+     * 而协程取消**掐不断已经阻塞在 OkHttp `execute()` / `readUtf8Line()` 里的线程**
+     * —— 那个协程会继续读流、继续回写进度和日志。2026-10-16 的日志实锤了这个后果：
+     * 用户停止后又开了一轮，旧协程把旧会话的进度写进了**新一轮的日志文件**，
+     * 界面上进度从 176 掉回 2。有了这个字段，[cancel] 就能立刻断掉真正的那根连接。
+     */
+    @Volatile
+    private var activeCall: Call? = null
+
+    /**
+     * 中止当前正在进行的进度流订阅（用户点「停止」时调）。
+     *
+     * 只取消本端这条 HTTP 连接 —— **后端那一轮会继续跑完并照常写检查点**，这是刻意的：
+     * 断点续测的全部价值就在于"端上断了、后端没白跑"。用户稍后在配置页点「继续上次测试」
+     * 就能复用已完成的结果。
+     */
+    fun cancel() {
+        runCatching { activeCall?.cancel() }
+    }
 
     @Serializable
     data class SessionRequest(
@@ -119,13 +164,19 @@ class BackendClient {
         val dimension: String? = null,
         val reportId: String? = null,
         val message: String? = null,
-        val tokens: SseTokens? = null
+        val tokens: SseTokens? = null,
+        /**
+         * 累计「复用（未重跑、不计费）」条数，缺省 0 = 全新一轮。
+         * 界面凭它把进度说成「x/y（复用 a / 新跑 b）」，否则续跑时用户分不清
+         * 是从断点接着跑、还是又从头烧了一遍 token（2026-10-16 加，后端同名下发）。
+         */
+        val resumed: Int = 0
     )
 
     /**
-     * 把整轮测试交给后端跑，期间经 [onProgress] 回传进度、[onLog] 回传进程日志（终端窗口用），
-     * 结束返回完整 [Report]。
-     * 失败（连接/非 2xx/后端 error 事件）抛 [ApiException]，由调用方转成 Error 状态。
+     * 把整轮测试交给后端跑，期间经 [onProgress] 回传进度（完成数 / 总数 / **其中复用数**）、
+     * [onLog] 回传进程日志（终端窗口用），结束返回完整 [Report]。
+     * 失败（连接/非 2xx/后端 error 事件/流中途断掉）抛 [ApiException]，由调用方转成 Error 状态。
      */
     suspend fun run(
         baseUrl: String,
@@ -136,7 +187,7 @@ class BackendClient {
         recursive: Boolean,
         variants: Boolean,
         token: String?,
-        onProgress: suspend (completed: Int, total: Int) -> Unit,
+        onProgress: suspend (completed: Int, total: Int, resumed: Int) -> Unit,
         onLog: ((String) -> Unit)? = null,
         resumeFrom: String? = null
     ): Report = withContext(Dispatchers.IO) {
@@ -254,7 +305,7 @@ class BackendClient {
         baseUrl: String,
         sid: String,
         token: String?,
-        onProgress: suspend (completed: Int, total: Int) -> Unit,
+        onProgress: suspend (completed: Int, total: Int, resumed: Int) -> Unit,
         onLog: ((String) -> Unit)? = null
     ) {
         val req = Request.Builder()
@@ -263,45 +314,87 @@ class BackendClient {
             .apply { auth(this, token) }
             .build()
 
-        http.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                val text = resp.body?.string() ?: ""
-                throw ApiException("订阅进度流失败 HTTP ${resp.code}: ${text.take(300)}", resp.code)
-            }
-            val source = resp.body?.source()
-                ?: throw ApiException("空响应体", resp.code)
-
-            while (true) {
-                val line = source.readUtf8Line() ?: break // 连接断开 = 流结束
-                if (!line.startsWith("data:")) continue    // 注释行 / 帧间空行：跳过
-                val payload = line.removePrefix("data:").trim()
-                if (payload.isEmpty()) continue
-
-                val ev = runCatching { json.decodeFromString(SseEvent.serializer(), payload) }
-                    .getOrNull() ?: continue // 解析不出的行忽略，别因一帧坏数据断整轮
-                when (ev.event) {
-                    "progress" -> {
-                        // 后端每帧都带累计用量，直接覆盖式写入 —— 与端上直连的累加语义不同
-                        ev.tokens?.let { t ->
-                            TokenMeter.setFromBackend(t.total, t.prompt, t.completion, t.calls, t.byRole)
-                        }
-                        onProgress(ev.completed, ev.total)
-                        // 计数行 + 后端随帧带来的「该条用例摘要」（判定 + 输入/回答/依据片段），
-                        // 与本机跑时 AttackEngine 打的日志同构。构造逻辑收敛在
-                        // SseLogFormat.progressLogLines（纯函数，有单测；**按行拆开**逐条入日志，
-                        // 整段塞成一个日志项会让终端里一条用例占掉一大块，见 TestRunStateHolder.appendLog）。
-                        progressLogLines(ev).forEach { onLog?.invoke(it) }
-                    }
-                    "done" -> {
-                        onLog?.invoke("✓ 后端已完成本轮测试，正在拉取报告…")
-                        break
-                    }
-                    "error" -> throw ApiException(ev.message ?: "后端报告任务错误", null)
-                    else -> { /* 未知事件忽略 */ }
+        // 记下 call 供 [cancel] 用（「停止」要能真正掐断这根连接，见 activeCall 的注释）。
+        // ⚠️ 必须 try/finally 清空：否则下一轮开始时会去 cancel 一根早就结束的 call。
+        val call = http.newCall(req)
+        activeCall = call
+        try {
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val text = resp.body?.string() ?: ""
+                    throw ApiException("订阅进度流失败 HTTP ${resp.code}: ${text.take(300)}", resp.code)
                 }
+                val source = resp.body?.source()
+                    ?: throw ApiException("空响应体", resp.code)
+
+                // 是否读到过后端的 `done`。没读到就结束 = 流半路断了（不是正常收尾），
+                // 必须报错而不是硬着头皮去拉报告 —— 拉报告只会拿到一个让人摸不着头脑的
+                // 「report not ready 404」，用户根本不知道发生了什么（2026-10-16 前就是这样）。
+                var sawDone = false
+                while (true) {
+                    val line = try {
+                        source.readUtf8Line()
+                    } catch (e: InterruptedIOException) {
+                        // OkHttp 的读超时（SocketTimeoutException 是它的子类）走这里。
+                        // 见 [SSE_IDLE_TIMEOUT_SECONDS]：正常长跑有 15s 心跳，绝不会触发。
+                        throw ApiException(idleTimeoutMessage(e), null, e)
+                    } ?: break // 对端关闭 = 流结束（走下面的 sawDone 判定）
+                    if (!line.startsWith("data:")) continue    // 注释行 / 心跳 `: keepalive` / 帧间空行：跳过
+                    val payload = line.removePrefix("data:").trim()
+                    if (payload.isEmpty()) continue
+
+                    val ev = runCatching { json.decodeFromString(SseEvent.serializer(), payload) }
+                        .getOrNull() ?: continue // 解析不出的行忽略，别因一帧坏数据断整轮
+                    when (ev.event) {
+                        "progress" -> {
+                            // 后端每帧都带累计用量，直接覆盖式写入 —— 与端上直连的累加语义不同
+                            ev.tokens?.let { t ->
+                                TokenMeter.setFromBackend(t.total, t.prompt, t.completion, t.calls, t.byRole)
+                            }
+                            onProgress(ev.completed, ev.total, ev.resumed)
+                            // 计数行 + 后端随帧带来的「该条用例摘要」（判定 + 输入/回答/依据片段），
+                            // 与本机跑时 AttackEngine 打的日志同构。构造逻辑收敛在
+                            // SseLogFormat.progressLogLines（纯函数，有单测；**按行拆开**逐条入日志，
+                            // 整段塞成一个日志项会让终端里一条用例占掉一大块，见 TestRunStateHolder.appendLog）。
+                            progressLogLines(ev).forEach { onLog?.invoke(it) }
+                        }
+                        "done" -> {
+                            sawDone = true
+                            onLog?.invoke("✓ 后端已完成本轮测试，正在拉取报告…")
+                            break
+                        }
+                        "error" -> throw ApiException(ev.message ?: "后端报告任务错误", null)
+                        else -> { /* 未知事件忽略 */ }
+                    }
+                }
+                if (!sawDone) throw ApiException(brokenStreamMessage(), null)
             }
+        } catch (e: IOException) {
+            // 连接被重置 / DNS 失败 / 中途 EOF 等。统一转成带「可续跑」提示的 ApiException，
+            // 否则用户只会看到一句 Java 异常类名（`java.net.SocketException: ...`）。
+            // ⚠️ ApiException 不是 IOException，所以上面抛的两种不会被这里二次包装。
+            throw ApiException(brokenStreamMessage(e), null, e)
+        } finally {
+            // 只有"还是我这一根"时才清空：极端情况下（旧 call 刚结束、新 call 已装上）
+            // 无脑清空会把新 call 的引用抹掉，于是「停止」再也取消不到任何东西。
+            if (activeCall === call) activeCall = null
         }
     }
+
+    /** 空闲超时的用户可读文案。带上底层异常名（排查时能区分读超时 / 连接重置 / 主动取消）。 */
+    private fun idleTimeoutMessage(e: Throwable): String =
+        "后端进度流已 $SSE_IDLE_TIMEOUT_SECONDS 秒收不到任何数据（含心跳），连接已断开" +
+            "（${e.javaClass.simpleName}）。上一轮任务在后端通常仍在继续跑，已完成的用例不会白跑 —— " +
+            "请稍后在测试配置页点「继续上次测试」续跑。"
+
+    /** 流中途断掉（读超时之外的 IO 异常 / 没等到 done 就结束）的用户可读文案。 */
+    private fun brokenStreamMessage(e: Throwable? = null): String =
+        buildString {
+            append("与后端的进度流中断了")
+            e?.message?.takeIf { it.isNotBlank() }?.let { append("（$it）") }
+            append("。若后端进程还在，那一轮任务通常仍在继续跑，已完成的结果都留在检查点里 —— ")
+            append("可稍后在测试配置页点「继续上次测试」续跑，已完成的用例不重跑、不计费。")
+        }
 
     private fun getReport(baseUrl: String, sid: String, token: String?): Report {
         val req = Request.Builder()

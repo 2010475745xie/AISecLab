@@ -5,6 +5,7 @@ import com.xieguojian.aiseclab.core.api.OpenAiCompatibleClient
 import com.xieguojian.aiseclab.core.engine.AttackEngine
 import com.xieguojian.aiseclab.core.engine.AttackModule
 import com.xieguojian.aiseclab.core.engine.RecursiveAdversarialAttack
+import com.xieguojian.aiseclab.core.engine.dimensionLabels
 import com.xieguojian.aiseclab.core.judge.Judge
 import com.xieguojian.aiseclab.core.model.Dimension
 import com.xieguojian.aiseclab.core.model.ModelProfile
@@ -35,7 +36,9 @@ class TestRunner(
     ): Report {
         val cases = modules.flatMap { it.buildCases() }
         val total = cases.size
-        val dimLabels = modules.joinToString("/") { it.dimension.label }
+        // ⚠️ 必须去重：变体集模块的 dimension 也是 SECURITY，不去重会打成
+        // 「安全性/…/安全性」（2026-10-17 设备日志实测）。
+        val dimLabels = dimensionLabels(modules)
         onLog?.invoke("▶ 开始测试：共 $total 条用例，维度 [$dimLabels]，递归对抗 = ${if (useRecursive && attackerChat != null) "开启" else "关闭"}")
         val results = mutableListOf<TestResult>()
 
@@ -45,10 +48,15 @@ class TestRunner(
             val securityCases = cases.filter { it.dimension == Dimension.SECURITY }
             val otherCases = cases.filter { it.dimension != Dimension.SECURITY }
 
-            // 普通维度：并发跑
+            // 普通维度：并发跑。
+            // ⚠️ `displayTotal = total` 不能省：`AttackEngine` 只知道手里这一批有多少条
+            //（这里是非安全维度的 32 条），不传全局条数，界面和终端行就会显示
+            // `#1/32`，而这一轮明明要跑 314 条（2026-10-17 设备日志实测踩到）。
             val engine = AttackEngine(targetClient, judge)
             results.addAll(
-                engine.run(otherCases, maxConcurrency, onProgress) { line -> onLog?.invoke(line) }
+                engine.run(otherCases, maxConcurrency, onProgress, displayTotal = total) { line ->
+                    onLog?.invoke(line)
+                }
             )
             var done = otherCases.size
 

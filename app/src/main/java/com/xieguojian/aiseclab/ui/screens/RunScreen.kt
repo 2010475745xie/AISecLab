@@ -37,8 +37,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.api.TokenMeter
 import com.xieguojian.aiseclab.core.model.formatElapsed
+import com.xieguojian.aiseclab.core.resolveRunMode
 import com.xieguojian.aiseclab.ui.TestRunStateHolder
 import com.xieguojian.aiseclab.ui.TestViewModel
 import kotlinx.coroutines.delay
@@ -58,9 +60,18 @@ fun RunScreen(
     val state by vm.testState.collectAsState()
     val log by vm.testLog.collectAsState()
     val tokens by TokenMeter.state.collectAsState()
+    val backendUrl by vm.backendUrl.collectAsState()
+    val localRun by vm.localRunEnabled.collectAsState()
+    // 是否委托后端跑（唯一口径 core/RunMode.kt，与配置页、服务分支同源）。
+    // 停止确认文案要分模式：委托后端时「这些结果会一并丢弃 / 无法恢复」**是错的** ——
+    // 后端那一轮不会因为本端断开而停，已完成的用例都落在后端检查点里，
+    // 回配置页点「继续上次测试」就能接着跑（不重跑、不计费）。
+    // 说成"无法恢复"既不实、又会让用户不敢点停止（2026-10-16 修）。
+    val backendMode = resolveRunMode(backendUrl, localRun) == RunMode.BACKEND
     val listState = rememberLazyListState()
-    // 「停止」= 丢弃本轮已跑完的所有结果（TestRunStateHolder.reset() 不保留任何一条）。
-    // 花了真金白银跑出来的东西不该一点就没，所以先让用户确认。
+    // 「停止」的后果**分模式**（见 backendMode 的注释）：本机跑 = 丢弃本轮结果；
+    // 委托后端 = 后端继续跑完、结果留在检查点里，回配置页可续跑。
+    // 所以必须先让用户确认，再决定要不要真的停。
     var confirmStop by remember { mutableStateOf(false) }
 
     // 新日志进来时自动滚到最底（用 snapshot，避免 items 还没重组完滚不到）
@@ -125,6 +136,17 @@ fun RunScreen(
                         "进度：${s.completed} / ${s.total}",
                         style = MaterialTheme.typography.bodyMedium
                     )
+                    // 续跑时进度会"唰"地跳到一大截（复用条瞬间完成），必须把「复用 / 新跑」拆开写，
+                    // 否则看起来像跳号、或者像 token 又白烧了一遍（2026-10-16 用户正是在这里困惑）。
+                    if (s.resumed > 0) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "其中复用 ${s.resumed} 条（未重跑、不计费）· 本轮新跑 " +
+                                "${(s.completed - s.resumed).coerceAtLeast(0)} 条",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 is TestViewModel.TestState.Done -> {
                     LinearProgressIndicator(progress = { 1f }, modifier = Modifier.fillMaxWidth())
@@ -237,10 +259,23 @@ fun RunScreen(
             onDismissRequest = { confirmStop = false },
             title = { Text("停止本轮测试？") },
             text = {
-                val done = runningState?.let { "已完成 ${it.completed} / ${it.total} 条，这些结果会一并丢弃。" }
-                    ?: "本轮结果会被丢弃。"
+                val done = when {
+                    runningState == null -> "本轮结果会被丢弃。"
+                    // 委托后端：**不会丢**。后端那一轮照旧跑完、结果都落在检查点里，
+                    // 回配置页点「继续上次测试」即可接着跑。这里必须说实话。
+                    backendMode ->
+                        "已完成 ${runningState.completed} / ${runningState.total} 条。" +
+                            "后端那一轮会继续跑完，已完成的用例都留在后端检查点里 —— " +
+                            "回「测试」页点「继续上次测试」就能接着跑，不重跑、不计费。"
+                    else -> "已完成 ${runningState.completed} / ${runningState.total} 条，这些结果会一并丢弃。"
+                }
                 val spent = tokens.summary()?.let { "\n\n已消耗 $it。" }.orEmpty()
-                Text(done + spent + "\n\n不会生成报告，也无法恢复。")
+                val tail = if (backendMode) {
+                    "\n\n本轮不会在手机上出报告；要拿报告请续跑把这一轮跑完。"
+                } else {
+                    "\n\n不会生成报告，也无法恢复。"
+                }
+                Text(done + spent + tail)
             },
             confirmButton = {
                 TextButton(onClick = {

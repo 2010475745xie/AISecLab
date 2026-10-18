@@ -157,6 +157,7 @@ object TestRunStateHolder {
         startedAtMs = null
         _state.value = TestViewModel.TestState.Idle
         _log.value = emptyList()
+        releaseRun()
     }
 
     private fun closeRunLog() {
@@ -164,6 +165,29 @@ object TestRunStateHolder {
         runLogWriter = null
     }
 
+    /**
+     * 认领本轮运行名额（**原子**）。true = 抢到了、可以开跑；false = 已经有一轮在跑，必须放弃。
+     *
+     * 为什么不能用 `isRunning` 代替：`isRunning` 只看 [state]，而 state 要等测试协程真正跑起来
+     * 才被置成 `Running` —— `beginRun`（建日志文件、落起点）之后到那一刻之间有一个空窗，
+     * 快速双击「开始测试」正好能钻进去，于是两轮并发写同一个 holder。
+     * 把"名额"与"界面状态"拆开，窗口就不存在了（2026-10-16）。
+     */
+    fun claimRun(): Boolean = claimed.compareAndSet(false, true)
+
+    /** 交还运行名额。跑完 / 出错 / 被中断 / 服务销毁时都要调，否则用户再也开不了下一轮。 */
+    fun releaseRun() {
+        claimed.set(false)
+    }
+
+    private val claimed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * 是否正在跑一轮。
+     *
+     * **名额**优先于**状态**：`claimRun` 抢到名额后、state 还是 Idle 的那个瞬间也算"在跑"，
+     * 否则 UI 侧的 `startTest` 会在那个窗口里放行第二次启动。
+     */
     val isRunning: Boolean
-        get() = _state.value is TestViewModel.TestState.Running
+        get() = claimed.get() || _state.value is TestViewModel.TestState.Running
 }

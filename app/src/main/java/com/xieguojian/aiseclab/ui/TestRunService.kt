@@ -53,9 +53,38 @@ import kotlinx.coroutines.launch
  */
 class TestRunService : Service() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * 本轮协程的作用域。**每轮重新建一个**（见 onStartCommand 里的赋值）。
+     *
+     * 为什么不复用同一个：被 `cancel()` 过的 Job 是**死的**，对它再 `launch`，协程会被立刻取消、
+     * 连函数体都进不去 —— 表现就是「停止后马上又点开始，界面毫无反应」。
+     * Service 实例不一定会被立刻销毁（`stopSelf` 只是"没有新请求就停"），所以这个坑是真实可达的。
+     */
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+
+    /**
+     * 当前正在跑的那一轮用的后端客户端。「停止」要靠它 [BackendClient.cancel] **真正掐断连接**
+     * —— 只 `scope.cancel()` 掐不断已经阻塞在 OkHttp 里的线程（见 [activeRun] 的注释）。
+     */
+    @Volatile
+    private var backendClient: BackendClient? = null
+
+    /**
+     * 当前这一轮的**代次**。每次认领到运行名额就 +1，[stopRun] 也 +1。
+     * 协程里所有回写（进度 / 日志 / 收尾）都先比对代次，**过期的一律丢弃**。
+     *
+     * 为什么非要有它（2026-10-16 日志实锤）：`stopRun()` 的 `scope.cancel()` **取消不了**
+     * 已经阻塞在 `OkHttpClient.newCall(..).execute()` / `readUtf8Line()` 里的协程 ——
+     * 那个协程会继续读流、继续回写。用户「停止」后又点「继续上次测试」，于是两条协程
+     * 同时往同一个 [TestRunStateHolder] 写：
+     *   · 旧会话的进度灌进新一轮的 UI 与通知栏（日志里 `进度 176` 之后突然冒出 `进度 2`）；
+     *   · 旧协程的 `finally` 还会 `stopForeground + stopSelf()` —— 把新一轮的前台服务直接干掉。
+     * 现场见 `aiseclab_run_1792165475419.log` 第 370 行：176 条复用之后跟的是旧会话
+     * （23:43 那轮）的第 2 条《高权限注入》，报的却是 `进度 2/314`。
+     */
+    private var activeRun = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -63,13 +92,42 @@ class TestRunService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // 停止动作：取消协程、收唤醒锁、撤通知
+        // 停止动作：取消协程、掐断连接、收唤醒锁、撤通知
         if (intent?.action == ACTION_STOP) {
             stopRun()
             return START_NOT_STICKY
         }
-        // 已经在跑就忽略重复启动（避免两个协程写同一个 holder）
-        if (TestRunStateHolder.isRunning) return START_NOT_STICKY
+
+        // ── 系统自动重投递：**绝不自动重跑** ──
+        // 进程被回收时内存里的 holder / 代次一起没了，此时若当成本轮新测试开跑，会**新建一个后端
+        // 会话从 0 开始**（老会话其实还在后端跑着）—— 两份结果互相覆盖、token 双倍烧。
+        // 所以这里只如实告知"被中断了"，把"要不要续跑"交回用户（检查点里那些结果都还在）。
+        if (flags and START_FLAG_REDELIVERY != 0) {
+            startForeground(NOTIF_ID, buildNotification("已中断"))
+            TestRunStateHolder.appendLog("⚠️ 上一轮测试被系统中断（进程被回收），本轮不会自动重跑")
+            TestRunStateHolder.appendLog(
+                "   后端模式下已完成的用例都留在检查点里：回「测试」页点「继续上次测试」即可续跑，不重跑、不计费。"
+            )
+            TestRunStateHolder.update(
+                TestViewModel.TestState.Error(
+                    "上一轮测试被系统中断（App 进程被回收），本轮不会自动重跑。" +
+                        "若那轮是委托后端跑的，已完成的用例还在后端检查点里 —— " +
+                        "回「测试」页点「继续上次测试」即可接着跑，不用从头再烧一遍 token。"
+                )
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        // 认领本轮运行名额。用**原子认领**而不是 `if (isRunning) return`：后者看的是 state，
+        // 而 state 要等协程起来才置成 Running —— `beginRun` 之后、`update(Running(0,0))` 之前
+        // 有一个空窗，快速双击「开始测试」正好能钻进去，于是两轮并发写同一个 holder。
+        // claimRun 把「名额」与「界面状态」解耦，窗口就不存在了。
+        if (!TestRunStateHolder.claimRun()) return START_NOT_STICKY
+        val gen = ++activeRun
+        // 本轮用全新的 scope（上一轮的 Job 已被 cancel，见 scope 的注释）
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
         val dims = (intent?.getIntegerArrayListExtra(EXTRA_DIMENSIONS)
             ?.mapNotNull { it.takeIf { i -> i in Dimension.values().indices }?.let { Dimension.values()[it] } }
@@ -85,12 +143,14 @@ class TestRunService : Service() {
         val target = repo.loadTarget()
         if (target == null) {
             TestRunStateHolder.update(TestViewModel.TestState.Error("未配置目标模型"))
+            TestRunStateHolder.releaseRun()
             stopSelf()
             return START_NOT_STICKY
         }
         val aux = repo.loadAux()
         val guard = repo.loadGuard()
         val roleSource = repo.loadRoleSource()
+        val backendToken = repo.loadBackendToken()
 
         // ── 后端模式：整轮测试委托给服务器跑（开关关闭且地址非空时走这里）──
         // 裁判模型也由客户端带来（BYOK）：比赛/共享服务器通常不预置裁判模型。
@@ -110,7 +170,8 @@ class TestRunService : Service() {
             )
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
-            return START_REDELIVER_INTENT
+            TestRunStateHolder.releaseRun()
+            return START_NOT_STICKY
         }
         if (runMode == RunMode.BACKEND) {
             val judgeProfile = when (roleSource) {
@@ -140,12 +201,13 @@ class TestRunService : Service() {
                 }
             )
             val client = BackendClient()
+            backendClient = client
             scope.launch {
                 // 后端委托分支不走 TestSession.run()，token 计数得在这里自己清零
                 TokenMeter.reset()
-                TestRunStateHolder.update(TestViewModel.TestState.Running(0, 0))
-                TestRunStateHolder.appendLog("🖥 委托后端运行：$backendUrl")
-                TestRunStateHolder.appendLog("▶ 维度：${dims.joinToString("/") { it.label }} · 递归对抗=$recursive · 越狱变体集=$variants")
+                update(gen, TestViewModel.TestState.Running(0, 0))
+                log(gen, "🖥 委托后端运行：$backendUrl")
+                log(gen, "▶ 维度：${dims.joinToString("/") { it.label }} · 递归对抗=$recursive · 越狱变体集=$variants")
                 try {
                     val rawReport = client.run(
                         baseUrl = backendUrl,
@@ -155,9 +217,10 @@ class TestRunService : Service() {
                         dimensions = dims,
                         recursive = recursive,
                         variants = variants,
-                        token = repo.loadBackendToken(),
-                        onProgress = { c, t -> onProgress(c, t) },
-                        onLog = { TestRunStateHolder.appendLog(it) },
+                        token = backendToken,
+                        // 三参回调：第三个是累计复用条数（续跑时界面要能说清"复用多少 / 新跑多少"）
+                        onProgress = { c, t, r -> onProgress(gen, c, t, r) },
+                        onLog = { log(gen, it) },
                         resumeFrom = resumeFrom
                     )
                     // ── 条数对账（2026-10-15）──
@@ -168,7 +231,8 @@ class TestRunService : Service() {
                     // pydantic 默认静默丢弃 → 照旧只跑基线 50 条，变体集一条没跑。
                     val planned = plannedCaseCount(dims, variants)
                     if (rawReport.results.size != planned) {
-                        TestRunStateHolder.appendLog(
+                        log(
+                            gen,
                             "⚠ 本轮预告 $planned 条，后端实际跑出 ${rawReport.results.size} 条 —— " +
                                 "最常见的原因是**后端不是最新代码**：旧版不认识新加的请求字段" +
                                 "（例如「越狱变体集」开关），会静默丢弃、照旧按老用例集跑。" +
@@ -185,23 +249,26 @@ class TestRunService : Service() {
                     )
                     // 存进历史记录（apiKey 抹零在 HistoryRepository 内做）；存档失败不影响本轮结果展示
                     runCatching { HistoryRepository(applicationContext).save(report) }
-                    TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
-                    TestRunStateHolder.update(TestViewModel.TestState.Done(report))
-                    TestRunStateHolder.currentRunLogPath?.let { p ->
-                        TestRunStateHolder.appendLog("📄 完整运行日志已保存到：$p")
-                    }
-                    TestRunStateHolder.finalizeRun(report)
+                    log(gen, "✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
+                    update(gen, TestViewModel.TestState.Done(report))
+                    TestRunStateHolder.currentRunLogPath?.let { p -> log(gen, "📄 完整运行日志已保存到：$p") }
+                    if (gen == activeRun) TestRunStateHolder.finalizeRun(report)
                 } catch (e: Exception) {
-                    TestRunStateHolder.appendLog("✗ 错误：${e.message ?: "未知错误"}")
-                    TestRunStateHolder.update(TestViewModel.TestState.Error(e.message ?: "未知错误"))
-                    TestRunStateHolder.currentRunLogPath?.let { p ->
-                        TestRunStateHolder.appendLog("📄 运行日志已保存到：$p")
-                    }
-                    TestRunStateHolder.finalizeRun(null)
+                    log(gen, "✗ 错误：${e.message ?: "未知错误"}")
+                    update(gen, TestViewModel.TestState.Error(e.message ?: "未知错误"))
+                    TestRunStateHolder.currentRunLogPath?.let { p -> log(gen, "📄 运行日志已保存到：$p") }
+                    if (gen == activeRun) TestRunStateHolder.finalizeRun(null)
                 } finally {
-                    releaseWakeLock()
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    // ⚠️ 收尾也必须过代次闸门：否则被淘汰的旧协程在这里 `stopForeground + stopSelf()`
+                    // 会把**新一轮**的前台服务与通知一起干掉（新一轮就此静默死掉）。
+                    if (gen == activeRun) {
+                        backendClient = null
+                        releaseWakeLock()
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        // 交还运行名额：不交还的话 `isRunning` 会一直是 true，用户再也开不了下一轮
+                        TestRunStateHolder.releaseRun()
+                        stopSelf()
+                    }
                 }
             }
             return START_REDELIVER_INTENT
@@ -224,14 +291,26 @@ class TestRunService : Service() {
 
         val session = TestSession(application, target, aux, guard, roleSource, dims, recursive, variants)
         scope.launch {
-            TestRunStateHolder.update(TestViewModel.TestState.Running(0, 0))
-            TestRunStateHolder.appendLog("▶ 本地模式：端上直接跑（${dims.size} 个维度 · 递归对抗=$recursive · 越狱变体集=$variants）")
-            TestRunStateHolder.appendLog("准备中…（加载模型 / 规则引擎）")
+            update(gen, TestViewModel.TestState.Running(0, 0))
+            log(gen, "▶ 本地模式：端上直接跑（${dims.size} 个维度 · 递归对抗=$recursive · 越狱变体集=$variants）")
+            log(gen, "准备中…（加载模型 / 规则引擎）")
             try {
                 val rawReport = session.run(
-                    onProgress = { completed, total -> onProgress(completed, total) },
-                    onLog = { TestRunStateHolder.appendLog(it) }
+                    // 本机跑不落盘、没有断点 ⇒ 复用数恒为 0（Running 的 resumed 缺省值）
+                    onProgress = { completed, total -> onProgress(gen, completed, total, 0) },
+                    onLog = { log(gen, it) }
                 )
+                // 条数对账（2026-10-17 补到本机分支）：以前只有后端分支对账，
+                // 于是"配置页说 314、本机实际跑 50/32"这种不一致**在本机模式下完全无声**。
+                // 判据取唯一口径 CasePlan，别在这里另算。
+                val plannedLocal = plannedCaseCount(dims, variants)
+                if (rawReport.results.size != plannedLocal) {
+                    log(
+                        gen,
+                        "⚠ 本轮预告 $plannedLocal 条，本机实际跑出 ${rawReport.results.size} 条 —— " +
+                            "两个数不一致说明「用例组装」与「条数口径」漂了，请把这条日志发出来（别自己蒙）。"
+                    )
+                }
                 // 本轮账单：跑完就落进报告，历史报告翻出来也能看到当时花了多少
                 //（跑的时候界面上那行实时计数只在当下看得到）。
                 // 用时同上：与测试页的实时计时同源。
@@ -241,42 +320,75 @@ class TestRunService : Service() {
                 )
                 // 存进历史记录（apiKey 抹零在 HistoryRepository 内做）；存档失败不影响本轮结果展示
                 runCatching { HistoryRepository(applicationContext).save(report) }
-                TestRunStateHolder.appendLog("✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
-                TestRunStateHolder.update(TestViewModel.TestState.Done(report))
-                TestRunStateHolder.currentRunLogPath?.let { p ->
-                    TestRunStateHolder.appendLog("📄 完整运行日志已保存到：$p")
-                }
-                TestRunStateHolder.finalizeRun(report)
+                log(gen, "✓ 测试完成，报告已生成（共 ${report.results.size} 条用例）")
+                update(gen, TestViewModel.TestState.Done(report))
+                TestRunStateHolder.currentRunLogPath?.let { p -> log(gen, "📄 完整运行日志已保存到：$p") }
+                if (gen == activeRun) TestRunStateHolder.finalizeRun(report)
             } catch (e: Exception) {
-                TestRunStateHolder.appendLog("✗ 错误：${e.message ?: "未知错误"}")
-                TestRunStateHolder.update(TestViewModel.TestState.Error(e.message ?: "未知错误"))
-                TestRunStateHolder.currentRunLogPath?.let { p ->
-                    TestRunStateHolder.appendLog("📄 运行日志已保存到：$p")
-                }
-                TestRunStateHolder.finalizeRun(null)
+                log(gen, "✗ 错误：${e.message ?: "未知错误"}")
+                update(gen, TestViewModel.TestState.Error(e.message ?: "未知错误"))
+                TestRunStateHolder.currentRunLogPath?.let { p -> log(gen, "📄 运行日志已保存到：$p") }
+                if (gen == activeRun) TestRunStateHolder.finalizeRun(null)
             } finally {
-                releaseWakeLock()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                // 同后端分支：过期协程不许碰新一轮的前台服务（详见 [activeRun]）
+                if (gen == activeRun) {
+                    releaseWakeLock()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    TestRunStateHolder.releaseRun()
+                    stopSelf()
+                }
             }
         }
         return START_REDELIVER_INTENT
     }
 
-    private fun onProgress(completed: Int, total: Int) {
-        TestRunStateHolder.update(TestViewModel.TestState.Running(completed, total))
-        notificationManager().notify(NOTIF_ID, buildNotification("进行中 $completed / $total"))
+    /**
+     * 代次校验通过才回写界面/日志 —— 过期（已被淘汰）的协程一律丢弃，详见 [activeRun]。
+     * 这两个小包装是**唯一**允许协程回写 holder 的口子，别在协程里直接调 TestRunStateHolder。
+     */
+    private fun log(gen: Int, line: String) {
+        if (gen == activeRun) TestRunStateHolder.appendLog(line)
     }
+
+    private fun update(gen: Int, st: TestViewModel.TestState) {
+        if (gen == activeRun) TestRunStateHolder.update(st)
+    }
+
+    /**
+     * @param resumed 累计复用条数（后端 SSE 下发，见 BackendClient.SseEvent.resumed）。
+     *   通知栏文案要带上它：续跑时前几百毫秒进度会"唰"地跳到一大截（复用条瞬间完成），
+     *   只写 `180 / 314` 用户会以为跳号或者白烧了 token。
+     */
+    private fun onProgress(gen: Int, completed: Int, total: Int, resumed: Int) {
+        if (gen != activeRun) return
+        TestRunStateHolder.update(TestViewModel.TestState.Running(completed, total, resumed))
+        notificationManager().notify(
+            NOTIF_ID, buildNotification(progressText(completed, total, resumed))
+        )
+    }
+
 
     override fun onDestroy() {
         scope.cancel()
         releaseWakeLock()
+        // 服务被销毁（含被系统回收）时交还名额，否则下次进来会以为"还有一轮在跑"开不了新的
+        TestRunStateHolder.releaseRun()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?) = null
 
     private fun stopRun() {
+        // ① 代次 +1：让正在跑的那个协程**及其后续所有回写**立刻作废（详见 [activeRun]）。
+        //    必须放在最前面 —— 它是唯一能保证"旧协程即使还活着也不再污染界面"的那道闸。
+        activeRun++
+        // ② 真正掐断连接。`scope.cancel()` 掐不断已经阻塞在 OkHttp `execute()/readUtf8Line()`
+        //    里的线程，必须显式 cancel 那根 Call，否则旧协程会继续读流、继续写 UI 和日志
+        //    （2026-10-16 的 176→2 就是这么来的）。
+        //    只断本端这根连接：后端那一轮照旧跑完并写检查点，用户回来还能「继续上次测试」。
+        backendClient?.cancel()
+        backendClient = null
+        // ③ 取消本轮协程（掐不动的那些由①②兜住）
         scope.cancel()
         releaseWakeLock()
         TestRunStateHolder.reset()

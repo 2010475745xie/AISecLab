@@ -142,9 +142,14 @@ async def run_session(
     调用方据此把检查点落盘 —— 等整轮结束再写，中途被杀就什么都没留下（见 checkpoint.py）。
 
     `on_plan(fingerprints)`：用例集合确定后、开跑前回调一次（断点续测用来写 expected）。
+    ⚠️ 它**可以抛异常**来中止整轮 —— `main.on_plan` 正是这么用的：本轮用例集合相对检查点
+    "只减不增"时拒绝开跑（否则旧结果会被丢弃）。异常会穿到 `_run` 落成 failed。
 
     `reuse`：断点续测用。`{指纹: TestResult}`，命中的用例**不重跑、不调模型**，直接并入结果。
     由调用方（`main._run`）从检查点读出后传入；为 None 时行为与旧版完全一致。
+
+    `on_progress(done, total, dim, tokens, message, resumed=)`：末位 `resumed` 是**累计复用条数**
+    （2026-10-16 加），只用于界面区分"复用 / 新跑"，不参与判定。
     """
     target = ChatClient(req.target)
     reuse = reuse or {}
@@ -199,6 +204,10 @@ async def run_session(
         # 并判断用例集合相对上次有没有变）。必须在开跑**之前**报，不然中途被杀就没有基线。
         on_plan([fingerprint(c) for c in cases])
     results: List[TestResult] = []
+    # 累计「复用（未重跑、不计费）」条数。随每个 progress 事件报给端上，
+    # 好让界面能说清「进度 180/314（复用 129 / 新跑 51）」——
+    # 只给总数时用户会以为续跑要重烧一遍 token（2026-10-16 用户就为此困惑过）。
+    resumed_so_far = 0
     # 用例级并发上限（真实 LLM 建议 1~3）。每个用例内裁判三角色仍受 llm_client 的
     # 全局并发闸（MAX_CONCURRENCY）约束，二者叠加后峰值并发 = min(本例, 全局)。
     sem = asyncio.Semaphore(max(1, int(os.environ.get("MAX_CASE_CONCURRENCY", "3"))))
@@ -272,20 +281,22 @@ async def run_session(
             on_case_done(tr, fp)
         if on_progress:
             await on_progress(len(results), total, tc.dimension, _tokens(),
-                              progress_message(tc, resp, jr))
+                              progress_message(tc, resp, jr), resumed=resumed_so_far)
 
     async def one(tc: TestCase) -> None:
+        nonlocal resumed_so_far
         fp = fingerprint(tc)
         # ── 断点续测：检查点里已经有这条 → 直接复用，**一个模型调用都不发** ──
         # 放在 sem **外面**：复用是纯本地操作，不该占并发额度（否则续跑的"起手"会很慢）。
         if fp in reuse:
             tr = reuse[fp]
+            resumed_so_far += 1            # 自增与 append 之间没有 await ⇒ asyncio 下单线程原子
             results.append(tr)
             if on_case_done:
                 on_case_done(tr, fp)
             if on_progress:
                 await on_progress(len(results), total, tc.dimension, _tokens(),
-                                  resume_message(tc, tr))
+                                  resume_message(tc, tr), resumed=resumed_so_far)
             return
         async with sem:
             t0 = time.time()   # 失败分支也要用它算耗时，所以定义在 try 外面
@@ -317,7 +328,7 @@ async def run_session(
                 if on_progress:
                     await on_progress(len(results), total, tc.dimension, _tokens(),
                                       "✗ 《%s》 执行失败（按不可评估记录，整轮继续）：%s"
-                                      % (tc.title, err))
+                                      % (tc.title, err), resumed=resumed_so_far)
 
     # return_exceptions=True 是第二道闸：one() 里已经兜住了业务异常，但万一还有漏网的
     #（比如 on_progress / on_case_done 回调自己抛），也不该让几十条已完成的结果白费。

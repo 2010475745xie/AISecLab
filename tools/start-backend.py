@@ -62,6 +62,66 @@ def clean_env():
     return env
 
 
+class _Tee:
+    """把 stdout / stderr 同时写到**终端**和**日志文件**。
+
+    为什么 `--inline` 模式必须有它（2026-10-16 加）：
+    `--inline` 是**同进程**跑 uvicorn（runpy），日志顺着当前进程的 stdout/stderr 走 ——
+    也就是 Bash 工具那个后台任务的管道，**不落盘**。于是服务一被回收/重启，日志就没了。
+    2026-10-16 排查"续跑丢了 79 条"时，后端侧**一个字的日志都拿不到**：
+    `D:\\aiseclab-backend.log` 的 mtime 停在上一轮 `do_start()` 的时刻，
+    最后全靠 App 端逐个日志文件才倒推出结论。代价太高，必须堵上。
+
+    实现要点：
+      · `errors="replace"` —— 日志里可能混进 GBK 字节，写日志本身绝不能再抛异常；
+      · **每次 write 后 flush** —— 崩溃也要留下崩之前那几行，那才是排障的全部价值；
+      · `close()` **不关**真 stdout —— runpy 返回后调用方的收尾 print 还得用它。
+    """
+
+    def __init__(self, stream, path):
+        self._stream = stream
+        self._fh = open(path, "a", encoding="utf-8", errors="replace", buffering=1)
+
+    def write(self, s):
+        try:
+            n = self._stream.write(s)
+        except Exception:
+            n = len(s)
+        try:
+            self._fh.write(s)
+            self._fh.flush()
+        except Exception:
+            pass
+        return n
+
+    def flush(self):
+        for f in (self._stream, self._fh):
+            try:
+                f.flush()
+            except Exception:
+                pass
+
+    def isatty(self):
+        # logging 会问这个来决定要不要上色。跟着真终端走。
+        try:
+            return self._stream.isatty()
+        except Exception:
+            return False
+
+    def fileno(self):
+        return self._stream.fileno()
+
+    @property
+    def encoding(self):
+        return "utf-8"
+
+    def close(self):
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+
+
 def read_port():
     """端口从 dist/.env 读（standalone.py 也是这么做的），兜底 8000。"""
     try:
@@ -203,7 +263,17 @@ def main():
         os.chdir(DIST)                  # ← 见文件头第 3 条
         with open(PIDFILE, "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
-        sys.stderr.write(f"[start-backend] inline, cwd={DIST}, pid={os.getpid()}\n")
+        # 日志落盘（见 _Tee 的注释）。开不起来也不能让服务起不来 —— 降级成"只有终端"。
+        try:
+            banner = "\n===== %s  AISecLab 后端启动（inline, pid=%d）=====\n" % (
+                time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid())
+            with open(LOG, "a", encoding="utf-8", errors="replace") as _b:
+                _b.write(banner)
+            sys.stdout = _Tee(sys.stdout, LOG)
+            sys.stderr = _Tee(sys.stderr, LOG)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[start-backend] ⚠️ 日志落盘没成功（{LOG}）：{e}\n")
+        sys.stderr.write(f"[start-backend] inline, cwd={DIST}, pid={os.getpid()}, 日志={LOG}\n")
         sys.stderr.flush()
         import runpy
         # ⚠️ standalone.py 里有 `from app.main import app`，靠的是"脚本所在目录进 sys.path[0]"。

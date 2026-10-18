@@ -94,7 +94,17 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
 
     sealed class TestState {
         object Idle : TestState()
-        data class Running(val completed: Int, val total: Int) : TestState()
+
+        /**
+         * 进行中。[resumed] = 这 [completed] 条里有多少是**从断点复用**的（未重跑、不计费）。
+         *
+         * 为什么要分开记：续跑时进度会"唰"地跳到一大截（复用条瞬间完成），只显示总数
+         * 用户会以为程序跳号、或者以为 token 白烧了一遍（2026-10-16 用户正是在这里困惑）。
+         * 新跑条数 = `completed - resumed`（`resumed` 是累计值，与后端 `progress` 事件同源）。
+         * 缺省 0 = 全新一轮（本机跑也永远是 0，端上不落盘、没有断点）。
+         */
+        data class Running(val completed: Int, val total: Int, val resumed: Int = 0) : TestState()
+
         data class Done(val report: Report) : TestState()
         data class Error(val message: String) : TestState()
     }
@@ -439,11 +449,25 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun reset() {
-        // 清掉状态桥，若服务还在跑（极端情况）也一并停掉
-        TestRunStateHolder.reset()
-        _testState.value = TestState.Idle
+        val app = getApplication<Application>()
+        // ① 让服务走 **ACTION_STOP**，而不是直接 stopService。
+        //    只有这样才会执行 TestRunService.stopRun() —— 它会 cancel 那根 SSE 连接。
+        //    `stopService → onDestroy` 只 `scope.cancel()`，而协程取消**掐不断已经阻塞在
+        //    OkHttp `execute()/readUtf8Line()` 里的线程**：旧协程会继续读流、继续把旧会话的
+        //    进度写进界面与日志。2026-10-16 日志里 `进度 176` 之后突然冒出 `进度 2`，
+        //    就是「停止」后旧协程没死、与新一轮抢同一个终端造成的（详见 TestRunService.activeRun）。
+        //
+        //    ⚠️ 这里**不**顺手 `TestRunStateHolder.reset()`：那会提前把运行名额交还出去，
+        //    万一紧接着有人开了新一轮，稍后到达的 ACTION_STOP 会把**新一轮**一起停掉。
+        //    清理交给服务自己的 stopRun()，它是串行的、不会打岔。
         runCatching {
-            getApplication<Application>().stopService(Intent(getApplication(), TestRunService::class.java))
+            app.startService(
+                Intent(app, TestRunService::class.java).apply {
+                    action = TestRunService.ACTION_STOP
+                }
+            )
         }
+        // ② 本 VM 自己那份镜像立刻置空（服务没起、或 startService 被系统拦下时界面也要先复位）
+        _testState.value = TestState.Idle
     }
 }

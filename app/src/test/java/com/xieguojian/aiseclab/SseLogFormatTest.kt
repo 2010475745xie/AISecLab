@@ -3,6 +3,7 @@ package com.xieguojian.aiseclab
 import com.xieguojian.aiseclab.core.api.BackendClient
 import com.xieguojian.aiseclab.core.api.progressLogLines
 import com.xieguojian.aiseclab.core.api.sseDetailLines
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -75,4 +76,30 @@ class SseLogFormatTest {
         val ev = BackendClient.SseEvent(event = "progress", completed = 2, total = 18)
         assertEquals("● [后端] 进度 2/18", progressLogLines(ev).first())
     }
+
+    // ── 线格式：字段名必须与后端逐字一致 ──
+    // 对不上是**静默丢弃**（kotlinx.serialization 用默认值兜住，不报错）⇒
+    // 界面永远显示"没有复用"，用户会以为续跑又从头烧了一遍 token。
+    // 与项目里"改判定必跑两端 parity 脚本"同源：契约要靠测试钉住，不能靠人眼比对。
+
+    @Test
+    fun resumed字段按后端下发的名字解析() {
+        val ev = json.decodeFromString(
+            BackendClient.SseEvent.serializer(),
+            """{"event":"progress","completed":178,"total":314,"dimension":"security","resumed":176}""",
+        )
+        assertEquals(176, ev.resumed)
+        assertEquals(178, ev.completed)
+    }
+
+    @Test
+    fun 旧后端没发resumed时按0处理() {
+        val ev = json.decodeFromString(
+            BackendClient.SseEvent.serializer(),
+            """{"event":"progress","completed":3,"total":314}""",
+        )
+        assertEquals(0, ev.resumed)
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
 }

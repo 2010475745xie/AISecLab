@@ -52,6 +52,11 @@ from .models import (
 # 所以实际路径是 backend/dist/checkpoints。
 STORE = CheckpointStore()
 
+# SSE 心跳间隔（秒）。见 stream() 里 gen() 的注释：这两条事件之间的静默期可能长达一两分钟，
+# 没有心跳，端上就分不清"模型正在慢慢答"和"连接早断了"。
+# 取 15s：远小于端上的空闲读超时（BackendClient 里 60s），正常长跑不触发，真断线一分钟内就报错。
+HEARTBEAT_SECONDS = 15
+
 
 @asynccontextmanager
 async def lifespan(_app: "FastAPI"):
@@ -255,20 +260,43 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         logger.info("[main] session %s 断点续测：%d 条已有结果将直接复用（不重跑）", sid, len(reuse))
 
     def on_plan(fps) -> None:
-        """用例集合确定后回调一次。把检查点校准到**本轮真正要跑的集合**。
+        """用例集合确定后回调一次。**最后一道「检查点 vs 本轮用例」对齐闸门**。
 
-        用例集合会变（用户改了维度、开关了越狱变体集），所以必须校准：
-        留着上一轮的旧指纹会让 `completed / total` 对不上，文件也会一直驮着没用的数据。
+        ── 2026-10-16 修复（此前造成 79 条结果静默丢失）──
+        旧实现把"不在本轮集合里"的旧结果**直接 pop 掉再落盘**，注释里叫"校准"，
+        实际是**不可逆的数据销毁**：`CheckpointStore.save` 是原子写，pop 完就真没了。
+        触发路径还极常见 —— 续跑时忘了勾「越狱变体集」（该开关**默认关**），
+        本轮集合只有 50 条（不含 264 条变体），于是 79 条已跑完的结果被当场抹掉；
+        用户回头把开关勾回去，那些结果已经回不来了（只能重烧 token 重跑）。
+
+        现在的口径：**检查点是用户的资产，后端无权单方面删除。**
+        发现集合对不上就**整轮拒绝**（抛异常 → `_run` 落到 `failed`，
+        **检查点一个字节都不动**），把选择权交回用户：
+          · 把配置改回与上次一致（通常就是勾上越狱变体集）→ 续跑，旧结果照常复用；
+          · 确实想换一批用例 → 新建一轮（新 sid、新文件，各写各的，互不覆盖）。
+
+        ⚠️ 反向（本轮是**超集**：用户多勾了一个维度）**不拦** —— 只增不减，
+        旧结果全部仍在 `keep` 里，没有任何数据会丢，直接跑新的即可。
         """
         keep = set(fps)
-        stale = [k for k in cp.results if k not in keep]
-        for fp in stale:
-            cp.results.pop(fp, None)
+        stale = sorted(k for k in cp.results if k not in keep)
+        if stale:
+            logger.error(
+                "[main] session %s 拒绝续跑：本轮 %d 条用例与检查点 %d 条已有结果不一致，"
+                "其中 %d 条不在本轮集合内", sid, len(fps), cp.completed, len(stale),
+            )
+            raise RuntimeError(
+                "续跑配置与上次不一致，已中止本轮（**检查点原样保留，没丢任何数据**）：\n"
+                "  本轮用例数   ：%d 条\n"
+                "  检查点已完成 ：%d 条\n"
+                "  对不上、会被丢弃：%d 条\n"
+                "最常见的原因是漏勾了「越狱变体集」或「递归对抗」（这两个开关默认关闭）。\n"
+                "请改回与上次一致的配置后重试续跑；确实要换一批用例，请新建一轮测试。"
+                % (len(fps), cp.completed, len(stale))
+            )
         cp.expected = list(fps)
         cp.total = len(fps)
         STORE.save(cp)
-        if stale:
-            logger.info("[main] session %s 用例集合变化：剔除 %d 条不再需要的旧结果", sid, len(stale))
 
     def on_case_done(tr: TestResult, fp: str) -> None:
         """**每出一条就落盘**（含复用与失败两条分支）。
@@ -278,22 +306,26 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         cp.results[fp] = tr.model_dump()
         STORE.save(cp)
 
-    async def on_progress(done, total, dim, tokens=None, message=None):
+    async def on_progress(done, total, dim, tokens=None, message=None, resumed=None):
+        # 往队列里放 **dict**（不是已序列化的字符串）：`stream()` 那边要读 `event` 字段判断收尾，
+        # 序列化由它统一做，避免"在 JSON 字符串里按词匹配"这种一改格式就静默失效的判据。
         await q.put(
-            json.dumps(
-                {
-                    "event": "progress",
-                    "completed": done,
-                    "total": total,
-                    "dimension": dim.value,
-                    # 累计 token 用量（被测 + 裁判 + 攻击），端上据此实时显示消耗
-                    "tokens": tokens or {},
-                    # 该条用例的**终端摘要**（多行文本，见 engine.progress_message）。
-                    # 端上按行拆开显示。没有它，委托后端跑时终端里只有进度数字、
-                    # 看不到任何模型回答 —— 用户 2026-10-13 反馈的正是这个问题。
-                    "message": message or "",
-                }
-            )
+            {
+                "event": "progress",
+                "completed": done,
+                "total": total,
+                "dimension": dim.value,
+                # 累计 token 用量（被测 + 裁判 + 攻击），端上据此实时显示消耗
+                "tokens": tokens or {},
+                # 该条用例的**终端摘要**（多行文本，见 engine.progress_message）。
+                # 端上按行拆开显示。没有它，委托后端跑时终端里只有进度数字、
+                # 看不到任何模型回答 —— 用户 2026-10-13 反馈的正是这个问题。
+                "message": message or "",
+                # 累计「复用（未重跑、不计费）」条数。端上显示「进度 x/y（复用 a / 新跑 b）」，
+                # 否则续跑时用户分不清是"从断点接着跑"还是"从头又烧了一遍 token"
+                #（2026-10-16 用户就为此困惑过）。缺省 0 = 全新一轮。
+                "resumed": int(resumed or 0),
+            }
         )
 
     try:
@@ -304,7 +336,7 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         cp.state = DONE
         cp.error = None
         STORE.save(cp)
-        await q.put(json.dumps({"event": "done", "reportId": sid}))
+        await q.put({"event": "done", "reportId": sid})
     except Exception as e:  # noqa: BLE001
         # 以前这里只往 SSE 塞一句 message，服务端**不留任何日志** ——
         # 端上只看到「连接失败」时，服务端也查不到是哪个上游、什么栈。见 2026-10-11 排查。
@@ -315,7 +347,7 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         cp.state = FAILED
         cp.error = "%s: %s" % (type(e).__name__, e)
         STORE.save(cp)
-        await q.put(json.dumps({"event": "error", "message": str(e)}))
+        await q.put({"event": "error", "message": str(e)})
     finally:
         sessions.get(sid, {})["running"] = False
         await judge_client.close()
@@ -332,13 +364,49 @@ async def stream(sid: str):
     q = s["queue"]
 
     async def gen():
-        while True:
-            item = await q.get()
-            yield f"data: {item}\n\n"
-            if '"event":"done"' in item or '"event":"error"' in item:
-                break
+        """SSE 生成器。**带心跳**（2026-10-16 加）。
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+        为什么必须有心跳：这条流一次能连着跑一两个小时，而两条事件之间可能长时间没东西 ——
+        单条用例要等被测模型出完整回答 + 裁判裁决，慢的时候一两分钟不出一个 progress 很正常。
+        没有心跳时，端上（OkHttp）读到的是**纯静默**：TCP 连接被中间设备悄悄掐断
+        （NAT 超时、手机切网、后端被杀）端上完全感知不到，表现就是"进度卡住不动、
+        不报错、不重连"，唯一出路是用户手动停 —— 而用户不一定知道"停"不等于"白跑"。
+        （2026-10-16 实测：22:42 之后整整 25 分钟零输出，界面停在 111/314。）
+
+        心跳用 SSE 注释行（`: keepalive`）：规范里以 `:` 开头的行客户端**必须忽略**，
+        所以端上的 `data:` 解析逻辑不用改，也不会被误当成一条 progress。
+
+        ⚠️ 这里用 `asyncio.wait` 而**不是** `asyncio.wait_for`：后者超时时会 **cancel**
+        那个取事件的 future，而 cancel 与"事件刚好在同一瞬间到达"之间存在竞态 ——
+        万一被吃掉的是 `done`，端上就要一直傻等到读超时才报错（报告其实早就好了）。
+        `asyncio.wait` 超时**不取消**，pending 直接留到下一轮接着等，一个事件都不会丢。
+        """
+        pending = None
+        try:
+            while True:
+                if pending is None:
+                    pending = asyncio.ensure_future(q.get())
+                done, _ = await asyncio.wait({pending}, timeout=HEARTBEAT_SECONDS)
+                if not done:
+                    yield ": keepalive\n\n"
+                    continue
+                ev = pending.result()      # 队列里放的是 **dict**，在这里统一序列化
+                pending = None
+                yield f"data: {json.dumps(ev)}\n\n"
+                # ⚠️ 收尾判据读的是**解析出来的 event 字段**，而不是在序列化后的字符串里找
+                # `"event":"done"` —— 后者曾经是个真 bug：`json.dumps` 默认在冒号后加空格
+                # （`"event": "done"`），字符串匹配**永远命中不了**，于是 done 之后这个流
+                # 永不结束、连接与协程一直挂着，非等客户端自己断开才被回收。
+                # 2026-10-17 被 backend/_verify_sse.py 的用例抓到（同一类坑：**别按词比**）。
+                if isinstance(ev, dict) and ev.get("event") in ("done", "error"):
+                    break
+        finally:
+            # 客户端断开（StreamingResponse 取消生成器）时别把取事件的 task 留成孤儿。
+            if pending is not None:
+                pending.cancel()
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/v1/reports/{sid}")
