@@ -52,6 +52,7 @@ FILES = [
     "README.md",
     "docker-compose.yml",
     "requirements.txt",
+    "init.sh",
     "start.sh",
     "stop.sh",
     "deploy.py",
@@ -61,7 +62,7 @@ FILES = [
 ]
 
 # 必须带可执行位（0755）的文件
-EXECUTABLE = {"start.sh", "stop.sh"}
+EXECUTABLE = {"init.sh", "start.sh", "stop.sh"}
 
 # 包里绝不能出现的东西 —— 打完后逐条断言
 FORBIDDEN_SUFFIX = (".env",)
@@ -95,7 +96,7 @@ def collect() -> list:
 
     # 快速部署说明：从 docs/ 取，包内改名成更好认的名字
     if os.path.isfile(QUICKSTART):
-        items.append(("部署说明.md", QUICKSTART))
+        items.append(("DEPLOY.md", QUICKSTART))   # 包内文件名一律英文：GitHub / Linux unzip 对中文名容易乱码
 
     return [(rel, src, os.path.basename(rel) in EXECUTABLE) for rel, src in items]
 
