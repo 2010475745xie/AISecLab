@@ -31,6 +31,7 @@ aiseclab-backend.zip
 
 # ── Signing material (never commit a keystore) ──
 keystore/
+keystore.properties
 *.jks
 *.keystore
 
