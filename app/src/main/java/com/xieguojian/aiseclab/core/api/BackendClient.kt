@@ -79,15 +79,47 @@ class BackendClient {
     private var activeCall: Call? = null
 
     /**
-     * 中止当前正在进行的进度流订阅（用户点「停止」时调）。
+     * 当前这一轮在后端的 sessionId（`POST /v1/sessions` 返回的那个）。
      *
-     * 只取消本端这条 HTTP 连接 —— **后端那一轮会继续跑完并照常写检查点**，这是刻意的：
-     * 断点续测的全部价值就在于"端上断了、后端没白跑"。用户稍后在配置页点「继续上次测试」
-     * 就能复用已完成的结果。
+     * 存在的唯一目的：让「停止」能**通知后端真的停**。只有 [cancel]（断连接）是不够的 ——
+     * 后端 `_run` 对端上断开毫不知情，会继续对着上游烧 token 烧一两个小时，
+     * 期间 `running` 恒为 True ⇒ 续跑和丢弃断点全被 409 挡住。
+     * 2026-10-18 用户实测原话：「已经停止并废弃了，断点续测依然正在运行而且无法丢弃断点」。
+     */
+    @Volatile
+    var activeSessionId: String? = null
+        private set
+
+    /**
+     * 收敛当前正在进行的进度流订阅（用户点「停止」时调）。
+     *
+     * 只取消本端这条 HTTP 连接。**光靠它不够** —— 后端那一轮会继续跑完。
+     * 要真停请用 [cancelSession]（`POST /v1/sessions/{sid}/cancel`）。
+     *
+     * 注意：真停之后**续跑能力不受影响** —— 已完成的结果早就逐条落进检查点了，
+     * 状态被标成 `interrupted`，用户照样能在配置页点「继续上次测试」接着跑剩下的。
+     * 所以「停止就真停」不损失任何东西，只是不再白烧 token。
      */
     fun cancel() {
         runCatching { activeCall?.cancel() }
     }
+
+    /**
+     * 让**后端**真正停下这一轮（`POST /v1/sessions/{sid}/cancel`）。
+     *
+     * 失败静默返回 false：停止是"尽力而为"的操作，报错弹窗只会盖住用户正在做的事。
+     * 后端那边即使没收到，重启服务时 `sweep_running()` 也会把遗留的 running 清成 interrupted。
+     */
+    suspend fun cancelSession(baseUrl: String, sid: String, token: String?): Boolean =
+        withContext(Dispatchers.IO) {
+            if (baseUrl.isBlank() || sid.isBlank()) return@withContext false
+            val req = Request.Builder()
+                .url(join(baseUrl, "/v1/sessions/$sid/cancel"))
+                .post(ByteArray(0).toRequestBody(null))
+                .apply { auth(this, token) }
+                .build()
+            runCatching { http.newCall(req).execute().use { it.isSuccessful } }.getOrDefault(false)
+        }
 
     @Serializable
     data class SessionRequest(
@@ -193,17 +225,24 @@ class BackendClient {
     ): Report = withContext(Dispatchers.IO) {
         val sid = createSession(baseUrl, target, aux, judge, dimensions, recursive, variants,
             token, resumeFrom)
-        if (resumeFrom.isNullOrBlank()) {
-            onLog?.invoke("▶ 已委托后端测试：目标 ${target.model} @ $baseUrl")
-        } else {
-            // 续跑的日志必须**说清复用了上次的会话**，否则用户会以为又是从 0 开始跑
-            //（进度会很快跳到 N/50，看起来像跳号）。
-            onLog?.invoke("↻ 继续上次未跑完的测试（sessionId = $resumeFrom）")
-            onLog?.invoke("  已完成的用例直接复用、不重跑；只补跑剩下的。目标 ${target.model} @ $baseUrl")
+        // 记下来给「停止」用：要通知后端掐掉这一轮，就必须知道 sid。
+        // finally 里清空 —— 跑完了就没有"正在跑的会话"可停了。
+        activeSessionId = sid
+        try {
+            if (resumeFrom.isNullOrBlank()) {
+                onLog?.invoke("▶ 已委托后端测试：目标 ${target.model} @ $baseUrl")
+            } else {
+                // 续跑的日志必须**说清复用了上次的会话**，否则用户会以为又是从 0 开始跑
+                //（进度会很快跳到 N/50，看起来像跳号）。
+                onLog?.invoke("↻ 继续上次未跑完的测试（sessionId = $resumeFrom）")
+                onLog?.invoke("  已完成的用例直接复用、不重跑；只补跑剩下的。目标 ${target.model} @ $baseUrl")
+            }
+            onLog?.invoke("  sessionId = $sid")
+            subscribeStream(baseUrl, sid, token, onProgress, onLog)
+            getReport(baseUrl, sid, token)
+        } finally {
+            activeSessionId = null
         }
-        onLog?.invoke("  sessionId = $sid")
-        subscribeStream(baseUrl, sid, token, onProgress, onLog)
-        getReport(baseUrl, sid, token)
     }
 
     /**

@@ -8,8 +8,9 @@ import asyncio
 import py_compile
 import glob
 
-# 让 backend 目录成为包根（app 包在其下）
-BACKEND = r"C:\AISecLab\backend"
+# 让 backend 目录成为包根（app 包在其下）。
+# 按本文件位置推算，不写死绝对路径 —— 否则解压到别处（评审服务器 / 部署包）必挂。
+BACKEND = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BACKEND)
 
 # ── 1) 编译所有 .py ──

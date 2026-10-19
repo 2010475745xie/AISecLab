@@ -33,7 +33,9 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .attack import generate_cases
-from .checkpoint import DONE, FAILED, RUNNING, Checkpoint, CheckpointStore
+from .checkpoint import (
+    DONE, FAILED, INTERRUPTED, RUNNING, Checkpoint, CheckpointStore,
+)
 from .engine import run_session
 from .judge import judge
 from .llm_client import ChatClient
@@ -227,8 +229,11 @@ async def create_session(req: SessionRequest):
     # 优化点④：长驻服务内存防护。sessions 永不清理会无限增长，超过上限淘汰最旧会话。
     if len(sessions) >= 200:
         sessions.pop(next(iter(sessions)), None)
-    sessions[sid] = {"queue": q, "report": None, "running": True}
-    asyncio.create_task(_run(sid, req, q))  # 后台跑，请求立即返回 sessionId
+    # **必须留 task 引用**（2026-10-18）：没有它，停止一轮测试就只能等它自己跑完。
+    # 用户点「停止并废弃」后，端上只是断开 SSE，后端 `_run` 照旧对着上游烧 token，
+    # `running` 永远是 True ⇒ 续跑和丢弃断点全被 409 挡住，形成死锁。
+    sessions[sid] = {"queue": q, "report": None, "running": True, "task": None}
+    sessions[sid]["task"] = asyncio.create_task(_run(sid, req, q))
     return {"sessionId": sid, "resumedFrom": resume or None}
 
 
@@ -350,10 +355,20 @@ async def _run(sid: str, req: SessionRequest, q: asyncio.Queue) -> None:
         await q.put({"event": "error", "message": str(e)})
     finally:
         sessions.get(sid, {})["running"] = False
-        await judge_client.close()
-        await attack_client.close()
+        # cancel 时这个 finally **也会进**（`asyncio.CancelledError` 是 BaseException，
+        # 不归上面那个 `except Exception` 管）。此刻 task 已处于 cancelling 状态，
+        # 里面的任何 await 都可能立刻再抛一次 —— 逐个兜住，别让"没关干净的 client"
+        # 把一次正常的停止变成一条失败记录。
+        for _closer in (judge_client.close, attack_client.close):
+            try:
+                await _closer()
+            except BaseException:  # noqa: BLE001
+                pass
         if guard is not None:
-            await guard.close()
+            try:
+                await guard.close()
+            except BaseException:  # noqa: BLE001
+                pass
 
 
 @app.get("/v1/sessions/{sid}/stream")
@@ -398,7 +413,7 @@ async def stream(sid: str):
                 # （`"event": "done"`），字符串匹配**永远命中不了**，于是 done 之后这个流
                 # 永不结束、连接与协程一直挂着，非等客户端自己断开才被回收。
                 # 2026-10-17 被 backend/_verify_sse.py 的用例抓到（同一类坑：**别按词比**）。
-                if isinstance(ev, dict) and ev.get("event") in ("done", "error"):
+                if isinstance(ev, dict) and ev.get("event") in ("done", "error", "cancelled"):
                     break
         finally:
             # 客户端断开（StreamingResponse 取消生成器）时别把取事件的 task 留成孤儿。
@@ -426,6 +441,62 @@ async def list_incomplete():
     端上点"继续"时用 `sessionId` 填 `resumeFrom` 重建请求。
     """
     return {"sessions": [cp.summary() for cp in STORE.list_incomplete()]}
+
+
+@app.post("/v1/sessions/{sid}/cancel")
+async def cancel_session(sid: str):
+    """**停止一轮正在跑的测试**（2026-10-18 新增）。
+
+    为什么必须有这个接口：端上的「停止并废弃」只做两件事 —— 断开 SSE 连接、清掉本地状态。
+    后端的 `_run` 任务对此毫不知情，会继续对着上游烧 token（实测 314 条能烧一个多小时），
+    而 `sessions[sid]["running"]` 始终是 True ⇒
+      · `POST /v1/sessions`（续跑）→ 409「该会话仍在运行中」
+      · `DELETE .../checkpoint`（丢弃断点）→ 409「该会话仍在运行中」
+    用户被彻底卡死：**"已经停止并废弃了，断点续测依然正在运行，且无法丢弃断点。"**
+
+    三个动作缺一不可：
+      ① `task.cancel()` —— 真正掐掉后台任务（不是只标记）；
+      ② 检查点 `running → interrupted` —— 否则磁盘上永远停在 running，
+         下次服务重启时 sweep 才能收拾，但在那之前「继续上次测试」里它仍是"正在运行"；
+      ③ 往 SSE 队列塞一条 `cancelled` —— 还挂着的端上立刻收尾，不用等 12 秒心跳。
+    """
+    s = sessions.get(sid)
+
+    if s is None:
+        # 服务重启过 / 被 200 条上限淘汰 / sid 打错。磁盘上可能还留着检查点，
+        # 那就顺手收拾干净并回一个**能看懂**的结果，而不是拿 404 把用户挡回去 ——
+        # 客户端调 cancel 的本意是"我要停下/我要清理"，回 404 对它没有任何帮助。
+        cp = STORE.load(sid)
+        if cp is None:
+            raise HTTPException(404, "没有这个会话：%s" % sid)
+        if cp.state == RUNNING:
+            cp.state = INTERRUPTED
+            STORE.save(cp)
+            return {"cancelled": False,
+                    "note": "任务已不在内存中（服务重启过？），已把检查点标为 interrupted"}
+        return {"cancelled": False, "note": "该会话已不在运行中（state=%s）" % cp.state}
+
+    was_running = bool(s.get("running"))
+    task = s.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+    s["running"] = False
+
+    cp = STORE.load(sid)
+    if cp is not None and cp.state == RUNNING:
+        # 只在**还是 running** 时改：任务可能刚好在这一瞬间跑完了 DONE，
+        # 把一个已完成的会话改成 interrupted 会让报告"消失"。
+        cp.state = INTERRUPTED
+        cp.error = None
+        STORE.save(cp)
+
+    q = s.get("queue")
+    if q is not None:
+        try:
+            q.put_nowait({"event": "cancelled"})
+        except asyncio.QueueFull:
+            pass
+    return {"cancelled": was_running, "checkpoint": "interrupted" if cp else None}
 
 
 @app.delete("/v1/sessions/{sid}/checkpoint")

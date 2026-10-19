@@ -358,6 +358,10 @@ class TestViewModel(app: Application) : AndroidViewModel(app) {
         if (url.isBlank()) return
         viewModelScope.launch(Dispatchers.IO) {
             val client = BackendClient()
+            // **先让后端真停，再丢**（2026-10-18）。后端只要认为这一轮还在跑
+            // （`sessions[sid]["running"]`），`DELETE .../checkpoint` 就回 409 ——
+            // 用户看到的现象正是"无法丢弃断点"。cancel 之后再 drop 才是可行的顺序。
+            client.cancelSession(url, sid, _backendToken.value)
             client.dropCheckpoint(url, sid, _backendToken.value)
             _resumable.value = client.listIncomplete(url, _backendToken.value)
         }

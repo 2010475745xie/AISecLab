@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
@@ -31,6 +32,12 @@ class OpenAiCompatibleClient(
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        // 关闭自动跟随：按 RFC，301/302 遇到 POST 会被**降级成 GET 并丢掉 body**，
+        // 于是 baseUrl 写成 http://api.deepseek.com/v1 时只会在 https 端点上挨一个
+        // 405/404，报错还指不出是协议写错。这里改成手动处理（见 chatDetailed）：
+        // 同 host 同 path 就按 **POST 原样重发**，换域名一律拒绝（不能把 apiKey 送给别人）。
+        // 对应后端 `llm_client.py::_redirect_target`。
+        .followRedirects(false)
         .build()
     /**
      * 一次补全的完整结果。
@@ -76,10 +83,27 @@ class OpenAiCompatibleClient(
 
         val request = builder.post(body).build()
 
-        client.newCall(request).execute().use { resp ->
-            val text = resp.body?.string() ?: ""
-            if (!resp.isSuccessful) {
-                throw ApiException("HTTP ${resp.code}: ${text.take(500)}", resp.code)
+        var call = client.newCall(request)
+        var resp = call.execute()
+        // 3xx：只在「同 host 同 path」时按 POST 原样重发一次。
+        if (resp.code in 300..399) {
+            val code = resp.code
+            val location = resp.header("Location")
+            resp.close()
+            val target = redirectTarget(request.url.toString(), location)
+                ?: throw ApiException(
+                    "上游返回 $code 重定向到非同一端点（$location），已拒绝跟随：" +
+                        "请求头里带 apiKey，跟到别的域等于把密钥交出去",
+                    code
+                )
+            call = client.newCall(builder.url(target).post(body).build())
+            resp = call.execute()
+        }
+
+        resp.use { r ->
+            val text = r.body?.string() ?: ""
+            if (!r.isSuccessful) {
+                throw ApiException("HTTP ${r.code}: ${text.take(500)}", r.code)
             }
             val completion = parseCompletion(text)
             // 记账：只记成功响应。失败/重试的请求拿不到 usage，宁可不计也不估算。
@@ -90,12 +114,77 @@ class OpenAiCompatibleClient(
     }
 
     private fun normalizeUrl(base: String): String {
-        val b = base.trim().trimEnd('/')
+        val b = normalizeBase(base).trimEnd('/')
         return if (b.endsWith("/chat/completions", ignoreCase = true)) b else "$b/chat/completions"
     }
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
+
+        private val LOOPBACK_HOSTS = setOf(
+            "localhost", "127.0.0.1", "::1", "0.0.0.0",
+            "host.docker.internal", "gateway.docker.internal"
+        )
+
+        /**
+         * 内网/本机端点通常就是明文 http（llama.cpp、Ollama、vLLM），不能强行升级。
+         * 判据与后端 `llm_client.py::_is_private_host` 同义：回环名 / `*.local` `*.lan` /
+         * 不含点的短名 / 私有或回环 IP。域名一律当公网（所以 `api.deepseek.com` 会被升级）。
+         */
+        fun isPrivateHost(host: String): Boolean {
+            val h = host.trim().lowercase().trim('[', ']')
+            if (h.isEmpty()) return true
+            if (h in LOOPBACK_HOSTS) return true
+            if (h.endsWith(".local") || h.endsWith(".lan") || !h.contains('.')) return true
+            val octets = h.split('.')
+            if (octets.size == 4) {
+                val n = octets.map { it.toIntOrNull() }
+                if (n.all { it != null && it in 0..255 }) {
+                    val a = n[0]!!; val b = n[1]!!
+                    return a == 10 || a == 127 ||
+                        (a == 192 && b == 168) ||
+                        (a == 172 && b in 16..31) ||
+                        (a == 169 && b == 254)
+                }
+            }
+            return h == "::1" || h.startsWith("fe80")
+        }
+
+        /**
+         * `http://公网域名` → `https://公网域名`；内网/本机与已写 https 的原样返回。
+         *
+         * 踩过的坑（2026-10-18）：填 `http://api.deepseek.com/v1`，DeepSeek 回 302 到 https。
+         * 对应后端 `llm_client.py::normalize_base_url`，两端须同义。
+         */
+        fun normalizeBase(base: String): String {
+            var s = base.trim()
+            if (s.isEmpty()) return s
+            if (!s.contains("://")) s = "https://$s"
+            val sep = s.indexOf("://")
+            if (!s.substring(0, sep).equals("http", ignoreCase = true)) return s
+            val rest = s.substring(sep + 3)
+            val authority = rest.substringBefore('/')
+            val hostPart = if (authority.startsWith("[")) {
+                authority.substringBefore(']').trimStart('[')   // IPv6 字面量
+            } else {
+                authority.substringBefore(':')
+            }
+            return if (isPrivateHost(hostPart)) s else "https://$rest"
+        }
+
+        /**
+         * 只在「同 host、同 path」时返回新 URL，否则 null。
+         * 卡这么死是因为请求头里带着 `Authorization: Bearer <apiKey>`。
+         * 对应后端 `llm_client.py::_redirect_target`。
+         */
+        fun redirectTarget(original: String, location: String?): String? {
+            if (location.isNullOrBlank()) return null
+            val from = original.toHttpUrlOrNull() ?: return null
+            val target = from.resolve(location) ?: return null
+            if (!from.host.equals(target.host, ignoreCase = true)) return null
+            if (from.encodedPath.trimEnd('/') != target.encodedPath.trimEnd('/')) return null
+            return target.toString()
+        }
 
         /**
          * 解析 chat completions 响应体。

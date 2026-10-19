@@ -8,11 +8,12 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import math
 import os
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -75,10 +76,87 @@ def _env_num(key: str, default: float) -> float:
         return default
 
 
+# ── baseUrl 规范化：`http://公网域名` → `https://公网域名` ───────────────
+# 踩过的坑（2026-10-18）：baseUrl 填成 `http://api.deepseek.com/v1`，
+# DeepSeek 对该地址回 **302 Location: https://api.deepseek.com/v1/...**。
+# httpx **默认不跟随重定向**（`follow_redirects=False`），`raise_for_status()`
+# 把 302 当成硬失败 ⇒ 每个用例都「执行失败（按不可评估记录）」，50 条全废；
+# 报错只写 `Redirect response '302 Found'`，完全看不出是协议写错。
+# 注意：**不能只靠 `follow_redirects=True`** —— 按 RFC，301/302 遇到 POST 会被
+# 降级成 GET 且丢掉 body，请求必然失败。所以这里两级防护：
+#   ① 请求前把公网 http 升级成 https（省掉一次往返）
+#   ② 真收到 3xx 时，只在「同 host 同 path」前提下按 **POST 原样重发**（见 _redirect_target）
+_LOOPBACK_HOSTS = frozenset(
+    {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal", "gateway.docker.internal"}
+)
+
+
+def _is_private_host(host: str) -> bool:
+    """内网/本机端点（llama.cpp、ollama、vLLM）通常就是明文 http，不能强行升级。
+
+    判据：回环名 / `*.local` `*.lan` / 不含点的短名 / IP 字面量且属于私有或回环。
+    域名一律当公网处理（所以 `api.deepseek.com` 会被升级）。
+    """
+    h = (host or "").strip().lower().strip("[]")
+    if not h:
+        return True
+    if h in _LOOPBACK_HOSTS or h.endswith(".local") or h.endswith(".lan") or "." not in h:
+        return True
+    try:
+        ip = ipaddress.ip_address(h)
+    except ValueError:
+        return False  # 是个域名 → 公网
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
+def normalize_base_url(raw: str) -> str:
+    """把 `http://公网域名` 升级成 `https://`；内网/本机地址与已写 https 的原样返回。"""
+    s = (raw or "").strip()
+    if not s:
+        return s
+    if "://" not in s:
+        s = "https://" + s  # 只写了 api.deepseek.com/v1
+    parts = urlsplit(s)
+    if parts.scheme.lower() != "http":
+        return s
+    if _is_private_host(parts.hostname or ""):
+        return s
+    return parts._replace(scheme="https").geturl()
+
+
+def _redirect_target(original: str, location: str) -> Optional[str]:
+    """只在「同 host、同 path」时接受重定向，返回新 URL；否则 None。
+
+    为什么卡这么死：请求头里带着 `Authorization: Bearer <apiKey>`，
+    跟随到别的域 = 把用户的密钥送给第三方。宁可直接报错。
+    """
+    if not location:
+        return None
+    try:
+        new = urljoin(original, location)
+        a, b = urlsplit(original), urlsplit(new)
+    except Exception:  # noqa: BLE001
+        return None
+    if (a.hostname or "").lower() != (b.hostname or "").lower():
+        return None
+    if (a.path or "").rstrip("/") != (b.path or "").rstrip("/"):
+        return None
+    return new
+
+
+
 class ChatClient:
     def __init__(self, profile: ModelProfile, timeout: Optional[float] = None,
                  max_retries: Optional[int] = None):
         self.profile = profile
+        # 规范化后的 baseUrl（见 normalize_base_url）。**只用于发请求**，
+        # profile 本身保持用户原样 —— 报告/日志里要能看到他到底填了什么。
+        self.base_url = normalize_base_url(profile.baseUrl)
+        if self.base_url != (profile.baseUrl or "").strip():
+            logger.warning(
+                "baseUrl 已自动规范化：%s → %s（填 http:// 的公网端点会被上游 302 跳到 https）",
+                profile.baseUrl, self.base_url,
+            )
         # 可配：上游慢 / 走了代理链路长时调大 REQUEST_TIMEOUT；上游限流严格时调小 MAX_RETRIES。
         # 未显式传参则读环境变量（缺省 90s / 5 次）。
         if timeout is None:
@@ -126,17 +204,36 @@ class ChatClient:
         return "%s (%s)" % (host or "?", self.profile.model or "?")
 
     async def chat(self, messages: list, temperature: float = 0.7) -> str:
-        url = self.profile.baseUrl.rstrip("/") + "/chat/completions"
+        url = self.base_url.rstrip("/") + "/chat/completions"
         headers = {"Content-Type": "application/json"}
         if self.profile.apiKey:
             headers["Authorization"] = f"Bearer {self.profile.apiKey}"
         payload = {"model": self.profile.model, "messages": messages, "temperature": temperature}
 
         last_exc: "Exception | None" = None
+        redirected = False
         for attempt in range(self.max_retries + 1):
             try:
                 async with _sem():
                     resp = await self._client.post(url, headers=headers, json=payload)
+                # 3xx：同端点（协议/端口变了）就按 **POST 原样重发一次**。
+                # 绝不能交给 httpx 的 follow_redirects —— 它会把 POST 降级成 GET、丢掉 body。
+                if 300 <= resp.status_code < 400 and not redirected:
+                    target = _redirect_target(url, resp.headers.get("location") or "")
+                    if target is None:
+                        raise RuntimeError(
+                            "上游 %s 返回 %d 重定向到非同一端点（%s）。已拒绝跟随："
+                            "请求头里带 apiKey，跟到别的域等于把密钥交出去。"
+                            % (self._endpoint_label(), resp.status_code,
+                               resp.headers.get("location") or "无 Location"))
+                    logger.warning(
+                        "上游 %s 返回 %d，按原样 POST 重发到 %s",
+                        self._endpoint_label(), resp.status_code, target,
+                    )
+                    url = target
+                    redirected = True
+                    async with _sem():
+                        resp = await self._client.post(url, headers=headers, json=payload)
                 # 限流 / 上游抖动：未到上限则退避后重试
                 if resp.status_code in _RETRY_STATUS and attempt < self.max_retries:
                     await asyncio.sleep(self._retry_delay(resp, attempt))
@@ -186,7 +283,7 @@ class ChatClient:
         `[(token文本, 概率)]`（概率 = exp(logprob)）。服务端不回 logprobs 时返回空表，
         护栏会退化为文字标签形态（`calibrated=False`，置信度打折）。
         """
-        url = self.profile.baseUrl.rstrip("/") + "/chat/completions"
+        url = self.base_url.rstrip("/") + "/chat/completions"
         headers = {"Content-Type": "application/json"}
         if self.profile.apiKey:
             headers["Authorization"] = f"Bearer {self.profile.apiKey}"
@@ -201,6 +298,20 @@ class ChatClient:
         try:
             async with _sem():
                 resp = await self._client.post(url, headers=headers, json=payload)
+            # 同 chat()：3xx 只在同端点时按 POST 原样重发一次。
+            if 300 <= resp.status_code < 400:
+                target = _redirect_target(url, resp.headers.get("location") or "")
+                if target is None:
+                    raise RuntimeError(
+                        "上游 %s 返回 %d 重定向到非同一端点（%s）。已拒绝跟随。"
+                        % (self._endpoint_label(), resp.status_code,
+                           resp.headers.get("location") or "无 Location"))
+                logger.warning(
+                    "上游 %s 返回 %d，按原样 POST 重发到 %s",
+                    self._endpoint_label(), resp.status_code, target,
+                )
+                async with _sem():
+                    resp = await self._client.post(target, headers=headers, json=payload)
             resp.raise_for_status()
         except httpx.TransportError as e:
             logger.warning("上游不可达（%s）：%s: %s", self._endpoint_label(), type(e).__name__, e)

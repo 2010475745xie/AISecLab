@@ -11,6 +11,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.PowerManager
 import android.os.PowerManager.PARTIAL_WAKE_LOCK
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.xieguojian.aiseclab.core.RunMode
 import com.xieguojian.aiseclab.core.TestSession
@@ -70,6 +71,18 @@ class TestRunService : Service() {
      */
     @Volatile
     private var backendClient: BackendClient? = null
+
+    /**
+     * 本轮的后端地址与 token —— 只为了「停止」时能**通知后端真的停**。
+     *
+     * [stopRun] 里 `scope.cancel()` 之后就没法再做任何挂起调用了，所以必须提前把这两个值
+     * 留在成员上，再用一个**独立作用域**去发那个 cancel 请求（见 [stopRun]）。
+     */
+    @Volatile
+    private var runBackendUrl: String? = null
+
+    @Volatile
+    private var runBackendToken: String? = null
 
     /**
      * 当前这一轮的**代次**。每次认领到运行名额就 +1，[stopRun] 也 +1。
@@ -202,6 +215,9 @@ class TestRunService : Service() {
             )
             val client = BackendClient()
             backendClient = client
+            // 「停止」要通知后端掐掉这一轮，见 stopRun()
+            runBackendUrl = backendUrl
+            runBackendToken = backendToken
             scope.launch {
                 // 后端委托分支不走 TestSession.run()，token 计数得在这里自己清零
                 TokenMeter.reset()
@@ -382,18 +398,48 @@ class TestRunService : Service() {
         // ① 代次 +1：让正在跑的那个协程**及其后续所有回写**立刻作废（详见 [activeRun]）。
         //    必须放在最前面 —— 它是唯一能保证"旧协程即使还活着也不再污染界面"的那道闸。
         activeRun++
-        // ② 真正掐断连接。`scope.cancel()` 掐不断已经阻塞在 OkHttp `execute()/readUtf8Line()`
+        // ② **先通知后端真停**（2026-10-18）。必须排在 `scope.cancel()` 前面：cancel 之后
+        //    本服务里任何挂起调用都发不出去。
+        //    之前这里只断本端连接，后端 `_run` 毫不知情，会继续对着上游烧 token 烧一两个小时，
+        //    期间 `running` 恒为 True ⇒ 续跑和丢弃断点全被 409 挡住。用户实测原话：
+        //    「已经停止并废弃了，断点续测依然正在运行而且无法丢弃断点。」
+        //    注意：真停**不影响续跑** —— 已完成的结果早就逐条落进检查点了。
+        notifyBackendStop()
+        // ③ 真正掐断连接。`scope.cancel()` 掐不断已经阻塞在 OkHttp `execute()/readUtf8Line()`
         //    里的线程，必须显式 cancel 那根 Call，否则旧协程会继续读流、继续写 UI 和日志
         //    （2026-10-16 的 176→2 就是这么来的）。
-        //    只断本端这根连接：后端那一轮照旧跑完并写检查点，用户回来还能「继续上次测试」。
         backendClient?.cancel()
         backendClient = null
-        // ③ 取消本轮协程（掐不动的那些由①②兜住）
+        // ④ 取消本轮协程（掐不动的那些由①②③兜住）
         scope.cancel()
         releaseWakeLock()
         TestRunStateHolder.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    /**
+     * 通知后端停止这一轮（`POST /v1/sessions/{sid}/cancel`）。
+     *
+     * 三个前提都必须满足，缺一就安静跳过：委托后端模式、拿到了 sid、地址非空。
+     * 用**独立作用域**发请求 —— [stopRun] 紧接着就 `scope.cancel()`，用本服务的 scope
+     * 会让这个请求刚发出去就被掐掉。
+     *
+     * 不在界面上写日志：此刻 `TestRunStateHolder.reset()` 马上就把日志清空并进 Idle 态了，
+     * 写进去也没人看得见。排查用 logcat 看这一行。
+     */
+    private fun notifyBackendStop() {
+        val client = backendClient ?: return
+        val sid = client.activeSessionId ?: return
+        val url = runBackendUrl?.takeIf { it.isNotBlank() } ?: return
+        val token = runBackendToken
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            val ok = runCatching { client.cancelSession(url, sid, token) }.getOrDefault(false)
+            runCatching {
+                if (ok) Log.i(TAG, "已通知后端停止 session=$sid")
+                else Log.w(TAG, "通知后端停止失败 session=$sid（后端可能仍在跑，重启后端可清掉）")
+            }
+        }
     }
 
     private fun acquireWakeLock() {
@@ -455,6 +501,7 @@ class TestRunService : Service() {
     }
 
     companion object {
+        private const val TAG = "TestRunService"
         const val NOTIF_ID = 1001
         const val CHANNEL_ID = "aiseclab_test_run"
         const val EXTRA_DIMENSIONS = "extra_dimensions"
