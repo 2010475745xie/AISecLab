@@ -31,15 +31,25 @@ services:
       JUDGE_NAME: "${JUDGE_NAME:-}"
       API_TOKEN: "${API_TOKEN:-}"
       PORT: "8000"
+      # 检查点目录。代码默认 <cwd>/checkpoints，容器里就是 /app/checkpoints —— 那个位置
+      # **不在卷上**，docker compose down 重建容器后断点全丢，"断点续跑"就成了空话。
+      # 指到卷内才名副其实。
+      CHECKPOINT_DIR: "/app/data"
     restart: unless-stopped
     volumes:
-      # `:z` = SELinux 共享标签（Rocky/RHEL 必需，其他平台忽略）。
-      # 当前后端报告存在内存态（sessions dict，重启即失），这个卷是预留给报告落盘用的 ——
-      # 挂上不影响现有行为。
-      - ./data:/app/data:z
+      # 用**命名卷**而不是 ./data 绑定挂载，是权限决定的：
+      # 镜像里以非 root 的 appuser 运行，而绑定挂载会把宿主目录的 uid/gid 带进容器 ——
+      # 评审在 Ubuntu 上用 sudo 起 compose 时 ./data 属主是 root，appuser 写不进去（EACCES）。
+      # 命名卷首次创建会继承镜像里 /app/data 的属主，不会踩这个坑。
+      # 想保留/备份检查点：docker run --rm -v aiseclab-data:/d -v $PWD:/out alpine cp -r /d /out
+      - aiseclab-data:/app/data
     # 健康检查定义在 Dockerfile 的 HEALTHCHECK 里（唯一实现），此处刻意不重复写。
     deploy:
       resources:
         limits:
           memory: 512M   # 单用户红队测试足够；若 OOM 调到 1G
           # 若你的引擎忽略 deploy.limits（很老的 compose），可改用顶层：mem_limit: 512m
+
+volumes:
+  # 检查点卷。docker compose down 会保留（除非加 -v），重建容器后断点还在。
+  aiseclab-data:

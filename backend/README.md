@@ -39,8 +39,9 @@ sudo firewall-cmd --reload
 两个 Rocky / RHEL 专属坑，**本仓库已经处理好**，但你得知道它们存在：
 
 - **SELinux 默认 Enforcing**：容器的绑定挂载若不带 SELinux 标签，容器内会 `EACCES` /
-  `Permission denied` 读不到挂载目录。`docker-compose.yml` 里 `./data:/app/data:z`
-  的 **`:z` 就是那个标签**，别删（Debian / Ubuntu / Docker Desktop 会忽略它，无副作用）。
+  `Permission denied` 读不到挂载目录。现在检查点用**命名卷** `aiseclab-data`（由 Docker 管理，
+  不经过 SELinux 路径标签），这个问题已经不存在；如果你改回 `./data` 绑定挂载，
+  记得加 **`:z`**（Debian / Ubuntu / Docker Desktop 会忽略它，无副作用）。
 - **firewalld 默认开启**：`start.sh` 起完服务后会检测到 firewalld 正在跑，并打印放行命令。
 
 ### 0.2 起服务
@@ -278,9 +279,12 @@ backend/
 `start.sh` 会检测到 firewalld 在跑并把这行打给你。
 
 **Q：容器日志报 `Permission denied` / `EACCES`，读不到 `/app/data`。**
-**SELinux**（Rocky 默认 Enforcing）。本仓库的 `docker-compose.yml` 已写成
-`./data:/app/data:z`，**`:z` 不能删**。若你改过 volumes，把 `:z` 补回去然后
-`docker compose up -d --force-recreate`。排查现场：`sudo ausearch -m avc -ts recent`。
+两种可能：
+1. 你改回过 `./data` 绑定挂载但漏了 SELinux 标签 —— 本仓库默认用**命名卷** `aiseclab-data`，
+   不经过 SELinux 路径标签；若坚持用宿主机目录，补 `:z` 后 `docker compose up -d --force-recreate`。
+   排查现场：`sudo ausearch -m avc -ts recent`。
+2. 宿主目录属主不是容器内的 `appuser`（Ubuntu 上用 `sudo` 起时 `./data` 属主是 root）——
+   这正是改用命名卷的原因。
 
 **Q：`python3 -m venv` 报 `ensurepip is not available`。**
 这是 RHEL 系特有的（Debian 那边缺的是 `python3-venv` 包）：
